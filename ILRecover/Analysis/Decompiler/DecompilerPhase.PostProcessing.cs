@@ -91,8 +91,10 @@ public partial class DecompilerPhase
 
     private static string FixCollapsedVarDeclarations(string source)
     {
+        source = CollapsedUsingVarDoubleIdentifierRegex().Replace(source, "using var $1 =");
+        source = CollapsedVarDoubleIdentifierRegex().Replace(source, "var $1 =");
         source = CollapsedUsingVarRegex().Replace(source, "using var ");
-        source = CollapsedVarAssignmentRegex().Replace(source, "var ");
+        source = CollapsedVarDeclarationRegex().Replace(source, "var $1 =");
         return source;
     }
 
@@ -111,6 +113,12 @@ public partial class DecompilerPhase
     [GeneratedRegex(@"\busing\s+var(?=[A-Za-z_])", RegexOptions.Multiline)]
     private static partial Regex CollapsedUsingVarRegex();
 
-    [GeneratedRegex(@"\bvar(?=[A-Za-z_][A-Za-z0-9_]*\s*=)", RegexOptions.Multiline)]
-    private static partial Regex CollapsedVarAssignmentRegex();
+    [GeneratedRegex(@"\bvar([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
+    private static partial Regex CollapsedVarDeclarationRegex();
+
+    [GeneratedRegex(@"\busing\s+var\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\s*=", RegexOptions.Multiline)]
+    private static partial Regex CollapsedUsingVarDoubleIdentifierRegex();
+
+    [GeneratedRegex(@"\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\s*=", RegexOptions.Multiline)]
+    private static partial Regex CollapsedVarDoubleIdentifierRegex();
 }

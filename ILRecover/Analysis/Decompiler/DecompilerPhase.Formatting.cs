@@ -247,9 +247,10 @@ public partial class DecompilerPhase
     {
         public override SyntaxNode VisitLocalDeclarationStatement(RoslynSyntax.LocalDeclarationStatementSyntax node)
         {
+            var canUseVar = CanUseImplicitVarSemantically(node, semanticModel);
             var rewrittenNode =
                 (RoslynSyntax.LocalDeclarationStatementSyntax?)base.VisitLocalDeclarationStatement(node) ?? node;
-            if (!CanUseImplicitVarSemantically(rewrittenNode, semanticModel))
+            if (!canUseVar)
                 return rewrittenNode;
 
             var varType = RoslynCSharp.SyntaxFactory.IdentifierName("var");
@@ -297,31 +298,31 @@ public partial class DecompilerPhase
     {
         public override SyntaxNode VisitMemberAccessExpression(RoslynSyntax.MemberAccessExpressionSyntax node)
         {
-            node = (RoslynSyntax.MemberAccessExpressionSyntax)(base.VisitMemberAccessExpression(node) ?? node);
-
             if (node.Name.Identifier.ValueText != "Instance" ||
                 node.Expression is not RoslynSyntax.GenericNameSyntax genericName ||
-                genericName.Identifier.ValueText != "LazySingleton" ||
                 genericName.TypeArgumentList.Arguments.Count != 1)
-                return node;
+                return base.VisitMemberAccessExpression(node);
 
             var targetTypeSyntax = genericName.TypeArgumentList.Arguments[0];
             var targetTypeSymbol = semanticModel.GetTypeInfo(targetTypeSyntax).Type;
-            if (targetTypeSymbol is null || !InheritsLazySingletonOfSelf(targetTypeSymbol))
-                return node;
+            if (targetTypeSymbol is null || !InheritsSelfReferencingGenericBase(targetTypeSymbol, genericName.Identifier.ValueText))
+                return base.VisitMemberAccessExpression(node);
+
+            var replacementExpressionText = targetTypeSyntax.ToString();
+            var rewrittenNode = (RoslynSyntax.MemberAccessExpressionSyntax)(base.VisitMemberAccessExpression(node) ?? node);
 
             return RoslynCSharp.SyntaxFactory.MemberAccessExpression(
                 RoslynCSharp.SyntaxKind.SimpleMemberAccessExpression,
-                targetTypeSyntax,
-                node.OperatorToken,
-                node.Name);
+                RoslynCSharp.SyntaxFactory.ParseExpression(replacementExpressionText),
+                rewrittenNode.OperatorToken,
+                rewrittenNode.Name);
         }
 
-        private static bool InheritsLazySingletonOfSelf(ITypeSymbol typeSymbol)
+        private static bool InheritsSelfReferencingGenericBase(ITypeSymbol typeSymbol, string genericBaseName)
         {
             for (var baseType = typeSymbol.BaseType; baseType is not null; baseType = baseType.BaseType)
             {
-                if (baseType.Name != "LazySingleton" || baseType.TypeArguments.Length != 1)
+                if (baseType.Name != genericBaseName || baseType.TypeArguments.Length != 1)
                     continue;
 
                 return SymbolEqualityComparer.Default.Equals(baseType.TypeArguments[0], typeSymbol);
