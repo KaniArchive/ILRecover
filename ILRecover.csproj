@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <DefaultItemExcludes>$(DefaultItemExcludes);_no\**</DefaultItemExcludes>
+        <RootNamespace>ILRecover</RootNamespace>
+        <PublishAot>true</PublishAot>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="ConsoleAppFramework" Version="5.7.13">
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+            <PrivateAssets>all</PrivateAssets>
+        </PackageReference>
+        <PackageReference Include="ICSharpCode.Decompiler" Version="10.0.1.8346"/>
+        <PackageReference Include="Kokuban" Version="0.2.0"/>
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0"/>
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.14.0"/>
+        <PackageReference Include="ZLinq" Version="1.5.6"/>
+        <PackageReference Include="ZLogger" Version="2.5.10"/>
+    </ItemGroup>
+</Project>
