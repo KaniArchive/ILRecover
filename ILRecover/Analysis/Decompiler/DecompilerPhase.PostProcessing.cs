@@ -19,14 +19,16 @@ public partial class DecompilerPhase
 
     private string PostProcessSource(SourceFileMap file, string source)
     {
+        var preferredLocalNames = GetPreferredCollapsedVarNames(file);
         source = RemoveDecompilerNoiseAttributes(source);
 
         if (Path.GetFileName(file.RelativePath).Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
             source = RewriteCompilerGeneratedProgram(source);
 
         source = RestoreUsingDirectives(source);
+        source = FixCollapsedVarDeclarations(source, preferredLocalNames);
         source = FormatSource(file, source);
-        return FixCollapsedVarDeclarations(source);
+        return FixCollapsedVarDeclarations(source, preferredLocalNames);
     }
 
     private static string RemoveDecompilerNoiseAttributes(string source) =>
@@ -89,13 +91,42 @@ public partial class DecompilerPhase
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string FixCollapsedVarDeclarations(string source)
+    private static HashSet<string> GetPreferredCollapsedVarNames(SourceFileMap file) =>
+        file.Methods.AsValueEnumerable()
+            .SelectMany(method => method.LocalVariables)
+            .Select(local => local.Name)
+            .Where(IsRestorableLocalName)
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static string FixCollapsedVarDeclarations(string source, IReadOnlySet<string> preferredLocalNames)
     {
-        source = CollapsedUsingVarDoubleIdentifierRegex().Replace(source, "using var $1 =");
-        source = CollapsedVarDoubleIdentifierRegex().Replace(source, "var $1 =");
         source = CollapsedUsingVarRegex().Replace(source, "using var ");
-        source = CollapsedVarDeclarationRegex().Replace(source, "var $1 =");
+        source = CollapsedVarDeclarationRegex().Replace(source, "$1var $2 =");
+        source = CollapsedUsingVarDoubleIdentifierRegex().Replace(source,
+            match => $"{match.Groups[1].Value}using var {ResolveCollapsedVarIdentifier(match.Groups[2].Value, match.Groups[3].Value, preferredLocalNames)} =");
+        source = CollapsedVarDoubleIdentifierRegex().Replace(source,
+            match => $"{match.Groups[1].Value}var {ResolveCollapsedVarIdentifier(match.Groups[2].Value, match.Groups[3].Value, preferredLocalNames)} =");
         return source;
+    }
+
+    private static string ResolveCollapsedVarIdentifier(
+        string firstIdentifier,
+        string secondIdentifier,
+        IReadOnlySet<string> preferredLocalNames)
+    {
+        if (string.Equals(firstIdentifier, secondIdentifier, StringComparison.Ordinal))
+            return firstIdentifier;
+
+        var firstMatches = preferredLocalNames.Contains(firstIdentifier);
+        var secondMatches = preferredLocalNames.Contains(secondIdentifier);
+
+        if (firstMatches && !secondMatches)
+            return firstIdentifier;
+
+        if (!firstMatches && secondMatches)
+            return secondIdentifier;
+
+        return secondIdentifier;
     }
 
     [GeneratedRegex(@"private\s+static\s+async\s+Task\s+<Main>\$\s*\(string\[\]\s+args\)", RegexOptions.Multiline)]
@@ -113,12 +144,12 @@ public partial class DecompilerPhase
     [GeneratedRegex(@"\busing\s+var(?=[A-Za-z_])", RegexOptions.Multiline)]
     private static partial Regex CollapsedUsingVarRegex();
 
-    [GeneratedRegex(@"\bvar([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
+    [GeneratedRegex(@"(^[ \t]*|[;{(][ \t]*)var([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
     private static partial Regex CollapsedVarDeclarationRegex();
 
-    [GeneratedRegex(@"\busing\s+var\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\s*=", RegexOptions.Multiline)]
+    [GeneratedRegex(@"(^[ \t]*|[;{(][ \t]*)using\s+var\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
     private static partial Regex CollapsedUsingVarDoubleIdentifierRegex();
 
-    [GeneratedRegex(@"\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*\s*=", RegexOptions.Multiline)]
+    [GeneratedRegex(@"(^[ \t]*|[;{(][ \t]*)var\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
     private static partial Regex CollapsedVarDoubleIdentifierRegex();
 }
