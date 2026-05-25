@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Syntax;
@@ -227,6 +228,9 @@ public partial class DecompilerPhase
             }
         }
 
+        foreach (var sharedFrameworkDirectory in GetSharedFrameworkDirectories())
+            yield return sharedFrameworkDirectory;
+
         if (dependencySearchDirs is null)
             yield break;
 
@@ -236,6 +240,44 @@ public partial class DecompilerPhase
                 continue;
 
             yield return Path.GetFullPath(dependencyDir);
+        }
+    }
+
+    private static IEnumerable<string> GetSharedFrameworkDirectories()
+    {
+        string runtimeDirectory;
+
+        try
+        {
+            runtimeDirectory = RuntimeEnvironment.GetRuntimeDirectory();
+        }
+        catch
+        {
+            yield break;
+        }
+
+        if (string.IsNullOrWhiteSpace(runtimeDirectory))
+            yield break;
+
+        DirectoryInfo runtimeDirectoryInfo;
+
+        try
+        {
+            runtimeDirectoryInfo = new DirectoryInfo(Path.GetFullPath(runtimeDirectory));
+        }
+        catch
+        {
+            yield break;
+        }
+
+        var sharedRoot = runtimeDirectoryInfo.Parent?.Parent?.FullName;
+        if (string.IsNullOrWhiteSpace(sharedRoot) || !Directory.Exists(sharedRoot))
+            yield break;
+
+        foreach (var frameworkDirectory in Directory.EnumerateDirectories(sharedRoot))
+        {
+            foreach (var versionDirectory in Directory.EnumerateDirectories(frameworkDirectory))
+                yield return versionDirectory;
         }
     }
 

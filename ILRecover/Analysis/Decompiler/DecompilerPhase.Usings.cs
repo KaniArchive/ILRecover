@@ -77,14 +77,30 @@ public partial class DecompilerPhase
 
     private string? ResolveNamespaceForIdentifier(string identifier, string? currentNamespace)
     {
-        if (!GetTypeNamespaceIndex().TryGetValue(identifier, out var candidates))
+        if (!TryGetCandidateNamespaces(identifier, out var candidates))
             return null;
 
         var namespaces = candidates
+            .AsValueEnumerable()
             .Where(namespaceName => !string.IsNullOrWhiteSpace(namespaceName))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
+        var preferredNamespaces = GetPreferredCandidateNamespaces(identifier)
+            .AsValueEnumerable()
+            .Where(namespaceName => !string.IsNullOrWhiteSpace(namespaceName))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var preferredNamespace = ResolvePreferredNamespace(preferredNamespaces, currentNamespace);
+        if (!string.IsNullOrWhiteSpace(preferredNamespace))
+            return preferredNamespace;
+
+        return ResolvePreferredNamespace(namespaces, currentNamespace);
+    }
+
+    private string? ResolvePreferredNamespace(IReadOnlyList<string> namespaces, string? currentNamespace)
+    {
         switch (namespaces.Count)
         {
             case 0:
@@ -92,6 +108,15 @@ public partial class DecompilerPhase
             case 1:
                 return namespaces[0];
         }
+
+        var preferredNonSystemNamespaces = namespaces
+            .AsValueEnumerable()
+            .Where(namespaceName => !namespaceName.Equals("System", StringComparison.Ordinal)
+                                    && !namespaceName.StartsWith("System.", StringComparison.Ordinal))
+            .ToList();
+
+        if (preferredNonSystemNamespaces.Count == 1)
+            return preferredNonSystemNamespaces[0];
 
         var preferredProjectNamespaces = namespaces
             .Where(namespaceName => namespaceName.Equals(_assemblyName, StringComparison.Ordinal)
@@ -121,12 +146,40 @@ public partial class DecompilerPhase
         return preferredSystemNamespaces.Count == 1 ? preferredSystemNamespaces[0] : null;
     }
 
+    private IEnumerable<string> GetPreferredCandidateNamespaces(string identifier)
+    {
+        var preferredTypeNamespaceIndex = GetPreferredTypeNamespaceIndex();
+        if (preferredTypeNamespaceIndex.TryGetValue(identifier, out var candidates))
+            return candidates;
+
+        if (!identifier.EndsWith("Attribute", StringComparison.Ordinal)
+            && preferredTypeNamespaceIndex.TryGetValue(identifier + "Attribute", out candidates))
+            return candidates;
+
+        return [];
+    }
+
+    private bool TryGetCandidateNamespaces(string identifier, out HashSet<string> candidates)
+    {
+        var typeNamespaceIndex = GetTypeNamespaceIndex();
+        if (typeNamespaceIndex.TryGetValue(identifier, out candidates!))
+            return true;
+
+        if (!identifier.EndsWith("Attribute", StringComparison.Ordinal)
+            && typeNamespaceIndex.TryGetValue(identifier + "Attribute", out candidates!))
+            return true;
+
+        candidates = null!;
+        return false;
+    }
+
     private Dictionary<string, HashSet<string>> GetTypeNamespaceIndex()
     {
         if (_typeNamespaceIndex is not null)
             return _typeNamespaceIndex;
 
         var assemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var preferredAssemblyNames = GetPreferredAssemblyNames();
 
         if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string trustedPlatformAssemblies)
             foreach (var path in trustedPlatformAssemblies.Split(Path.PathSeparator,
@@ -144,16 +197,59 @@ public partial class DecompilerPhase
 
         assemblyPaths.Add(Path.GetFullPath(dllPath));
 
+        _preferredTypeNamespaceIndex = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         foreach (var assemblyPath in assemblyPaths)
-            AddAssemblyTypesToNamespaceIndex(result, assemblyPath);
+            AddAssemblyTypesToNamespaceIndex(
+                result,
+                _preferredTypeNamespaceIndex,
+                assemblyPath,
+                preferredAssemblyNames.Contains(Path.GetFileNameWithoutExtension(assemblyPath)));
 
         _typeNamespaceIndex = result;
         return result;
     }
 
-    private static void AddAssemblyTypesToNamespaceIndex(Dictionary<string, HashSet<string>> index, string assemblyPath)
+    private Dictionary<string, HashSet<string>> GetPreferredTypeNamespaceIndex()
+    {
+        if (_preferredTypeNamespaceIndex is not null)
+            return _preferredTypeNamespaceIndex;
+
+        _ = GetTypeNamespaceIndex();
+        return _preferredTypeNamespaceIndex ?? new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+    }
+
+    private HashSet<string> GetPreferredAssemblyNames()
+    {
+        var preferredAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            Path.GetFileNameWithoutExtension(dllPath)
+        };
+
+        try
+        {
+            var file = new PEFile(dllPath);
+            foreach (var handle in file.Metadata.AssemblyReferences)
+            {
+                var assemblyReference = file.Metadata.GetAssemblyReference(handle);
+                var assemblyName = file.Metadata.GetString(assemblyReference.Name);
+                if (!string.IsNullOrWhiteSpace(assemblyName))
+                    preferredAssemblyNames.Add(assemblyName);
+            }
+        }
+        catch
+        {
+        }
+
+        return preferredAssemblyNames;
+    }
+
+    private static void AddAssemblyTypesToNamespaceIndex(
+        Dictionary<string, HashSet<string>> index,
+        Dictionary<string, HashSet<string>> preferredIndex,
+        string assemblyPath,
+        bool includeInPreferredIndex)
     {
         try
         {
@@ -181,6 +277,17 @@ public partial class DecompilerPhase
                 }
 
                 namespaces.Add(namespaceName);
+
+                if (!includeInPreferredIndex)
+                    continue;
+
+                if (!preferredIndex.TryGetValue(name, out var preferredNamespaces))
+                {
+                    preferredNamespaces = new HashSet<string>(StringComparer.Ordinal);
+                    preferredIndex[name] = preferredNamespaces;
+                }
+
+                preferredNamespaces.Add(namespaceName);
             }
         }
         catch
@@ -200,6 +307,9 @@ public partial class DecompilerPhase
 
         foreach (var typeSyntax in root.DescendantNodes().OfType<RoslynSyntax.TypeSyntax>())
             AddIdentifiersFromTypeSyntax(typeSyntax, identifiers);
+
+        foreach (var attributeSyntax in root.DescendantNodes().OfType<RoslynSyntax.AttributeSyntax>())
+            AddIdentifiersFromNameSyntax(attributeSyntax.Name, identifiers);
 
         foreach (var memberAccess in root.DescendantNodes().OfType<RoslynSyntax.MemberAccessExpressionSyntax>())
         {
@@ -237,6 +347,30 @@ public partial class DecompilerPhase
                     identifiers.Add(genericName.Identifier.ValueText);
                     break;
             }
+    }
+
+    private static void AddIdentifiersFromNameSyntax(RoslynSyntax.NameSyntax nameSyntax, HashSet<string> identifiers)
+    {
+        switch (nameSyntax)
+        {
+            case RoslynSyntax.IdentifierNameSyntax identifierName
+                when StartsWithUppercase(identifierName.Identifier.ValueText):
+                identifiers.Add(identifierName.Identifier.ValueText);
+                break;
+            case RoslynSyntax.GenericNameSyntax genericName
+                when StartsWithUppercase(genericName.Identifier.ValueText):
+                identifiers.Add(genericName.Identifier.ValueText);
+                foreach (var typeArgument in genericName.TypeArgumentList.Arguments)
+                    AddIdentifiersFromTypeSyntax(typeArgument, identifiers);
+                break;
+            case RoslynSyntax.QualifiedNameSyntax qualifiedName:
+                AddIdentifiersFromNameSyntax(qualifiedName.Left, identifiers);
+                AddIdentifiersFromNameSyntax(qualifiedName.Right, identifiers);
+                break;
+            case RoslynSyntax.AliasQualifiedNameSyntax aliasQualifiedName:
+                AddIdentifiersFromNameSyntax(aliasQualifiedName.Name, identifiers);
+                break;
+        }
     }
 
     private static RoslynSyntax.ExpressionSyntax GetLeftMostExpression(RoslynSyntax.ExpressionSyntax expression)

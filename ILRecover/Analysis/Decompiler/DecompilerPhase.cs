@@ -22,6 +22,7 @@ public partial class DecompilerPhase(
     private readonly string? _editorConfigPath = string.IsNullOrWhiteSpace(editorConfigPath) ? null : Path.GetFullPath(editorConfigPath);
     private IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference>? _formattingReferences;
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
+    private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;
     private Dictionary<int, MethodDebugSignature>? _methodDebugSignatures;
 
     public void Run()
