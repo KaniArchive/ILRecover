@@ -1,0 +1,3 @@
+[submodule "ILSpy"]
+	path = ILSpy
+	url = https://github.com/KaniArchive/ILSpy
