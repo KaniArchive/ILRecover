@@ -13,18 +13,7 @@ public partial class DecompilerPhase
 {
     private SyntaxNode ApplyLocalVariableNameRewrite(SourceFileMap file, SyntaxNode root)
     {
-        var syntaxTree = RoslynCSharp.CSharpSyntaxTree.ParseText(root.ToFullString());
-        var compilation = RoslynCSharp.CSharpCompilation.Create(
-            _assemblyName + ".LocalNames",
-            [syntaxTree],
-            GetFormattingReferences(),
-            new RoslynCSharp.CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        var semanticModel = compilation.GetSemanticModel(syntaxTree, true);
-        var rewrittenRoot =
-            new LocalVariableNameMethodRewriter(semanticModel, BuildMethodLocalRenamePlans(file)).Visit(
-                syntaxTree.GetRoot());
-        return rewrittenRoot;
+        return root;
     }
 
     private Dictionary<string, IReadOnlyList<string>> BuildMethodLocalRenamePlans(SourceFileMap file)

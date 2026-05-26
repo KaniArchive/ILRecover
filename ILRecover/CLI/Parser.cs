@@ -52,7 +52,7 @@ public static class Parser
             builder.Build();
 
             Log.Info("Decompiling...");
-            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dependencyDirs, editorConfig);
+            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dependencyDirs, editorConfig, target.PdbPath);
             phase.Run();
 
             Log.Info($"Done: {outputDir}");

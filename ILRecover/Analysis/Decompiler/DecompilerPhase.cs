@@ -2,10 +2,12 @@ using System.Reflection.Metadata;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.Syntax;
+using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ILRecover.Helpers;
 using ILRecover.Models;
+using ILRecover.Pdb;
 using ZLinq;
 
 namespace ILRecover.Analysis.Decompiler;
@@ -16,7 +18,8 @@ public partial class DecompilerPhase(
     string outputDir,
     string? csVersion = null,
     IReadOnlyList<string>? dependencySearchDirs = null,
-    string? editorConfigPath = null)
+    string? editorConfigPath = null,
+    string? pdbPath = null)
 {
     private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
     private readonly string? _editorConfigPath = string.IsNullOrWhiteSpace(editorConfigPath) ? null : Path.GetFullPath(editorConfigPath);
@@ -29,7 +32,8 @@ public partial class DecompilerPhase(
 
     public void Run()
     {
-        var decompiler = BuildDecompiler();
+        using var debugInfoProvider = BuildDebugInfoProvider();
+        var decompiler = BuildDecompiler(debugInfoProvider);
         var userFiles = mapped.AsValueEnumerable().Where(f => !f.IsGenerated).ToList();
 
         var splitTypeNames = mapped
@@ -147,7 +151,7 @@ public partial class DecompilerPhase(
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
-    private CSharpDecompiler BuildDecompiler()
+    private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
     {
         var langVersion = csVersion switch
         {
@@ -165,13 +169,33 @@ public partial class DecompilerPhase(
         {
             ThrowOnAssemblyResolveErrors = false,
             RemoveDeadCode = false,
-            RemoveDeadStores = false
+            RemoveDeadStores = false,
+            UseDebugSymbols = debugInfoProvider is not null
         };
 
         var file = new PEFile(dllPath);
         var resolver = new UniversalAssemblyResolver(dllPath, false, file.DetectTargetFrameworkId());
         AddResolverSearchDirectories(resolver);
-        return new CSharpDecompiler(dllPath, resolver, settings);
+
+        return new CSharpDecompiler(dllPath, resolver, settings)
+        {
+            DebugInfoProvider = debugInfoProvider
+        };
+    }
+
+    private PortablePdbDebugInfoProvider? BuildDebugInfoProvider()
+    {
+        if (string.IsNullOrWhiteSpace(pdbPath) || !File.Exists(pdbPath))
+            return null;
+
+        try
+        {
+            return new PortablePdbDebugInfoProvider(dllPath, pdbPath);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void AddResolverSearchDirectories(UniversalAssemblyResolver resolver)
