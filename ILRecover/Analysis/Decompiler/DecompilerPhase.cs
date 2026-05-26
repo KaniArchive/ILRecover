@@ -23,6 +23,8 @@ public partial class DecompilerPhase(
     private IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference>? _formattingReferences;
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;
+    private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
+    private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndexByArity;
     private Dictionary<int, MethodDebugSignature>? _methodDebugSignatures;
 
     public void Run()

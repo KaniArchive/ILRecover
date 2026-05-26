@@ -21,6 +21,7 @@ public partial class DecompilerPhase
     {
         var preferredLocalNames = GetPreferredCollapsedVarNames(file);
         source = RemoveDecompilerNoiseAttributes(source);
+        source = RemoveInvalidUsingDirectives(source);
 
         if (Path.GetFileName(file.RelativePath).Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
             source = RewriteCompilerGeneratedProgram(source);
@@ -28,7 +29,8 @@ public partial class DecompilerPhase
         source = RestoreUsingDirectives(source);
         source = FixCollapsedVarDeclarations(source, preferredLocalNames);
         source = FormatSource(file, source);
-        return FixCollapsedVarDeclarations(source, preferredLocalNames);
+        source = FixCollapsedVarDeclarations(source, preferredLocalNames);
+        return RemoveInvalidUsingDirectives(source);
     }
 
     private static string RemoveDecompilerNoiseAttributes(string source) =>
