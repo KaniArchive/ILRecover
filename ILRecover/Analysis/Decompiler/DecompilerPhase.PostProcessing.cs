@@ -22,6 +22,7 @@ public partial class DecompilerPhase
         var preferredLocalNames = GetPreferredCollapsedVarNames(file);
         source = RemoveDecompilerNoiseAttributes(source);
         source = RemoveInvalidUsingDirectives(source);
+        source = FixInvalidRefMemberAccess(source);
 
         if (Path.GetFileName(file.RelativePath).Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
             source = RewriteCompilerGeneratedProgram(source);
@@ -30,6 +31,7 @@ public partial class DecompilerPhase
         source = FixCollapsedVarDeclarations(source, preferredLocalNames);
         source = FormatSource(file, source);
         source = FixCollapsedVarDeclarations(source, preferredLocalNames);
+        source = FixInvalidRefMemberAccess(source);
         return RemoveInvalidUsingDirectives(source);
     }
 
@@ -111,6 +113,9 @@ public partial class DecompilerPhase
         return source;
     }
 
+    private static string FixInvalidRefMemberAccess(string source) =>
+        InvalidRefMemberAccessRegex().Replace(source, "$1.$2");
+
     private static string ResolveCollapsedVarIdentifier(
         string firstIdentifier,
         string secondIdentifier,
@@ -154,4 +159,7 @@ public partial class DecompilerPhase
 
     [GeneratedRegex(@"(^[ \t]*|[;{(][ \t]*)var\s*([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=", RegexOptions.Multiline)]
     private static partial Regex CollapsedVarDoubleIdentifierRegex();
+
+    [GeneratedRegex(@"\(\([^)]+\)\(ref\s+([^\)]+)\)\)\.([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.Multiline)]
+    private static partial Regex InvalidRefMemberAccessRegex();
 }
