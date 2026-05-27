@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Syntax;
-using ILRecover.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Options;
 using ZLinq;
@@ -27,47 +26,7 @@ public partial class DecompilerPhase
         return source.Trim() + Environment.NewLine;
     }
 
-    private static void ApplyHeuristicVarRewrite(SyntaxTree tree)
-    {
-        foreach (var declaration in tree.Descendants.OfType<VariableDeclarationStatement>().ToList())
-        {
-            if (!CanUseImplicitVarHeuristically(declaration))
-                continue;
-
-            declaration.Type = new SimpleType("var");
-        }
-    }
-
-    private static bool CanUseImplicitVarHeuristically(VariableDeclarationStatement declaration)
-    {
-        if (declaration.Type.IsNull || declaration.Type.ToString() == "var")
-            return false;
-
-        if (declaration.Modifiers.HasFlag(Modifiers.Const) || declaration.Variables.Count != 1)
-            return false;
-
-        var variable = declaration.Variables.FirstOrDefault();
-        if (variable is null || variable.Initializer.IsNull)
-            return false;
-
-        return variable.Initializer switch
-        {
-            ObjectCreateExpression objectCreate => HasMatchingType(declaration.Type, objectCreate.Type),
-            ArrayCreateExpression arrayCreate => HasMatchingType(declaration.Type, arrayCreate.Type),
-            CastExpression castExpression => HasMatchingType(declaration.Type, castExpression.Type),
-            DefaultValueExpression defaultValue => HasMatchingType(declaration.Type, defaultValue.Type),
-            _ => false
-        };
-    }
-
-    private static bool HasMatchingType(AstType declarationType, AstType initializerType) =>
-        NormalizeTypeName(declarationType) == NormalizeTypeName(initializerType);
-
-    private static string NormalizeTypeName(AstType type) =>
-        type.ToString().Replace("global::", string.Empty, StringComparison.Ordinal)
-            .Replace(" ", string.Empty, StringComparison.Ordinal);
-
-    private string FormatSource(SourceFileMap file, string source)
+    private string FormatSource(string source)
     {
         var parseOptions = new RoslynCSharp.CSharpParseOptions(RoslynCSharp.LanguageVersion.Preview);
         var syntaxTree = RoslynCSharp.CSharpSyntaxTree.ParseText(source, parseOptions);
@@ -75,11 +34,10 @@ public partial class DecompilerPhase
         if (syntaxTree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return source.TrimEnd() + Environment.NewLine;
 
-        var root = ApplySemanticVarRewrite(syntaxTree);
+        var root = syntaxTree.GetRoot();
         root = ApplyLazySingletonSimplification(root);
         root = ApplyCallerMemberNameSimplification(root);
         root = ApplyEditorConfigDrivenSimplifications(root);
-        root = ApplyLocalVariableNameRewrite(file, root);
         using var workspace = new AdhocWorkspace();
         var solution = workspace.CurrentSolution.WithOptions(ApplyEditorConfigOptions(workspace.Options));
         workspace.TryApplyChanges(solution);
@@ -167,19 +125,6 @@ public partial class DecompilerPhase
 
     private SyntaxNode ApplyCallerMemberNameSimplification(SyntaxNode root)
         => new CallerMemberNameConstructorRewriter().Visit(root);
-
-    private SyntaxNode ApplySemanticVarRewrite(Microsoft.CodeAnalysis.SyntaxTree syntaxTree)
-    {
-        var compilation = RoslynCSharp.CSharpCompilation.Create(
-            _assemblyName + ".Formatting",
-            [syntaxTree],
-            GetFormattingReferences(),
-            new RoslynCSharp.CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-        var semanticModel = compilation.GetSemanticModel(syntaxTree, true);
-        var root = syntaxTree.GetRoot();
-        return new ImplicitVarRewriter(semanticModel).Visit(root);
-    }
 
     private IReadOnlyList<MetadataReference> GetFormattingReferences()
     {
@@ -284,57 +229,6 @@ public partial class DecompilerPhase
     [GeneratedRegex(@"public\s+Task\s+(\w+)\(([^\)]*)\)\s*\{\s*return\s+Task\.CompletedTask;\s*\}",
         RegexOptions.Multiline)]
     private static partial Regex ExpressionBodyTaskCompletedRegex();
-
-    private sealed class ImplicitVarRewriter(SemanticModel semanticModel) : RoslynCSharp.CSharpSyntaxRewriter
-    {
-        public override SyntaxNode VisitLocalDeclarationStatement(RoslynSyntax.LocalDeclarationStatementSyntax node)
-        {
-            var canUseVar = CanUseImplicitVarSemantically(node, semanticModel);
-            var rewrittenNode =
-                (RoslynSyntax.LocalDeclarationStatementSyntax?)base.VisitLocalDeclarationStatement(node) ?? node;
-            if (!canUseVar)
-                return rewrittenNode;
-
-            var varType = RoslynCSharp.SyntaxFactory.IdentifierName("var");
-            return rewrittenNode.WithDeclaration(rewrittenNode.Declaration.WithType(varType));
-        }
-
-        private static bool CanUseImplicitVarSemantically(
-            RoslynSyntax.LocalDeclarationStatementSyntax node,
-            SemanticModel semanticModel)
-        {
-            if (node.Modifiers.Any(modifier => modifier.RawKind == (int)RoslynCSharp.SyntaxKind.ConstKeyword))
-                return false;
-
-            var declaration = node.Declaration;
-            if (declaration.Type.IsVar || declaration.Variables.Count != 1)
-                return false;
-
-            var variable = declaration.Variables[0];
-            if (variable.Initializer is null)
-                return false;
-
-            var initializer = variable.Initializer.Value;
-            if (initializer.RawKind == (int)RoslynCSharp.SyntaxKind.NullLiteralExpression
-                || initializer.RawKind == (int)RoslynCSharp.SyntaxKind.DefaultLiteralExpression
-                || initializer is RoslynSyntax.AnonymousMethodExpressionSyntax
-                || initializer is RoslynSyntax.SimpleLambdaExpressionSyntax
-                || initializer is RoslynSyntax.ParenthesizedLambdaExpressionSyntax)
-                return false;
-
-            var declaredType = semanticModel.GetTypeInfo(declaration.Type).Type;
-            var initializerType = semanticModel.GetTypeInfo(initializer).Type;
-
-            if (declaredType is null || initializerType is null)
-                return false;
-
-            if (declaredType.TypeKind == TypeKind.Dynamic
-                || initializerType.TypeKind == TypeKind.Dynamic)
-                return false;
-
-            return SymbolEqualityComparer.Default.Equals(declaredType, initializerType);
-        }
-    }
 
     private sealed class LazySingletonInstanceRewriter(SemanticModel semanticModel) : RoslynCSharp.CSharpSyntaxRewriter
     {

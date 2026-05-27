@@ -28,7 +28,6 @@ public partial class DecompilerPhase(
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndexByArity;
-    private Dictionary<int, MethodDebugSignature>? _methodDebugSignatures;
 
     public void Run()
     {
@@ -128,7 +127,7 @@ public partial class DecompilerPhase(
         if (combinedTree is null)
             return null;
 
-        ApplyHeuristicVarRewrite(combinedTree);
+        ResolveFileLocalUsings(combinedTree, decompiler);
         var source = SyntaxTreeToString(combinedTree);
         return PostProcessSource(file, source);
     }
