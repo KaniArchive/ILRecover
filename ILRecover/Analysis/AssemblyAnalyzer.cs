@@ -64,7 +64,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             .Select(source => source.OriginalPath)
             .ToList());
 
-        return new AnalysisResult(mapped, skipped);
+        return new AnalysisResult(mapped, skipped, pdbSources);
     }
 
     private static Dictionary<TypeDefinitionHandle, string> BuildTypeNameLookup(MetadataReader reader)

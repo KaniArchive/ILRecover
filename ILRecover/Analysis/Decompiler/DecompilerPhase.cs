@@ -33,7 +33,7 @@ public partial class DecompilerPhase(
     {
         using var debugInfoProvider = BuildDebugInfoProvider();
         var decompiler = BuildDecompiler(debugInfoProvider);
-        var userFiles = mapped.AsValueEnumerable().Where(f => !f.IsGenerated).ToList();
+        var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
 
         var splitTypeNames = mapped
             .AsValueEnumerable()
@@ -73,6 +73,47 @@ public partial class DecompilerPhase(
                 Log.Error($"skip: {normalizedRelativePath} ({ex.Message})");
             }
         }
+    }
+
+    private List<SourceFileMap> ExpandFilesWithGeneratedCompanions(IReadOnlyList<SourceFileMap> sourceFiles)
+    {
+        var generatedCompanionsByType = sourceFiles
+            .AsValueEnumerable()
+            .Where(file => file.IsGenerated && file.OriginalPath.Contains("/Generated/", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(file => file.TypeFullNames
+                .AsValueEnumerable()
+                .Distinct(StringComparer.Ordinal)
+                .Select(typeFullName => (typeFullName, file)))
+            .GroupBy(pair => pair.typeFullName, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(pair => pair.file).Distinct().ToList(),
+                StringComparer.Ordinal);
+
+        var expanded = new List<SourceFileMap>();
+
+        foreach (var file in sourceFiles.Where(file => !file.IsGenerated))
+        {
+            var methods = file.Methods.ToList();
+
+            foreach (var typeFullName in file.TypeFullNames)
+            {
+                if (!generatedCompanionsByType.TryGetValue(typeFullName, out var companions))
+                    continue;
+
+                foreach (var companion in companions)
+                    methods.AddRange(companion.Methods);
+            }
+
+            expanded.Add(file with
+            {
+                Methods = methods
+                    .DistinctBy(method => method.MethodHandle)
+                    .ToList()
+            });
+        }
+
+        return expanded;
     }
 
     private string NormalizeOutputRelativePath(string relativePath)
@@ -116,7 +157,11 @@ public partial class DecompilerPhase(
             var fullTypeTree = TryDecompileType(decompiler, typeName);
             if (fullTypeTree is null) continue;
 
-            var filteredTree = FilterTypeTree(fullTypeTree, selectedTokens, splitTypeNames.Contains(typeName));
+            var filteredTree = FilterTypeTree(
+                fullTypeTree,
+                selectedTokens,
+                splitTypeNames.Contains(typeName),
+                ShouldPreserveSharedTypeMembers(file.RelativePath, typeName));
             if (filteredTree is null) continue;
 
             combinedTree = combinedTree is null
@@ -148,6 +193,31 @@ public partial class DecompilerPhase(
     {
         var nestedIdx = typeFullName.IndexOf('+');
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
+    }
+
+    private bool ShouldPreserveSharedTypeMembers(string relativePath, string rootTypeName)
+    {
+        var normalizedRelativePath = relativePath.Replace('\\', '/');
+        return string.Equals(normalizedRelativePath, GetSharedTypeMemberCarrierPath(rootTypeName), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? GetSharedTypeMemberCarrierPath(string rootTypeName)
+    {
+        var simpleTypeName = rootTypeName[(rootTypeName.LastIndexOf('.') + 1)..];
+        var candidates = mapped
+            .Where(file => !file.IsGenerated
+                           && file.TypeFullNames.Any(typeName => string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
+            .Select(file => file.RelativePath.Replace('\\', '/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return candidates
+            .OrderByDescending(path => path.EndsWith('/' + simpleTypeName + ".cs", StringComparison.OrdinalIgnoreCase)
+                                       || string.Equals(path, simpleTypeName + ".cs", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(path => path.Count(ch => ch == '/'))
+            .ThenBy(path => path.Length)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
     }
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)

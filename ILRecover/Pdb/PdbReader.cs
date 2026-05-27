@@ -66,7 +66,6 @@ public static class PdbReader
     {
         var p = path.Replace('\\', '/');
         return p.Contains("/obj/")
-               || p.Contains("/generated/")
                || p.EndsWith(".g.cs")
                || p.EndsWith(".Generated.cs")
                || p.Contains("MemoryPack.Generator")

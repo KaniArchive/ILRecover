@@ -8,12 +8,16 @@ namespace ILRecover.Analysis.Decompiler;
 
 public partial class DecompilerPhase
 {
-    private static SyntaxTree? FilterTypeTree(SyntaxTree tree, HashSet<EntityHandle> selectedTokens, bool forcePartial)
+    private static SyntaxTree? FilterTypeTree(
+        SyntaxTree tree,
+        HashSet<EntityHandle> selectedTokens,
+        bool forcePartial,
+        bool preserveSharedTypeMembers)
     {
         var clone = (SyntaxTree)tree.Clone();
 
         foreach (var member in clone.Members.ToList().AsValueEnumerable()
-                     .Where(member => !PruneNode(member, selectedTokens)))
+                     .Where(member => !PruneNode(member, selectedTokens, preserveSharedTypeMembers)))
             member.Remove();
 
         if (clone.Members.Count == 0)
@@ -26,31 +30,49 @@ public partial class DecompilerPhase
         return clone;
     }
 
-    private static bool PruneNode(AstNode node, HashSet<EntityHandle> selectedTokens)
+    private static bool PruneNode(AstNode node, HashSet<EntityHandle> selectedTokens, bool preserveSharedTypeMembers)
     {
         switch (node)
         {
             case NamespaceDeclaration ns:
                 foreach (var member in ns.Members.ToList().AsValueEnumerable()
-                             .Where(member => !PruneNode(member, selectedTokens)))
+                             .Where(member => !PruneNode(member, selectedTokens, preserveSharedTypeMembers)))
                     member.Remove();
 
                 return ns.Members.Count > 0;
 
             case TypeDeclaration typeDecl:
                 foreach (var member in typeDecl.Members.ToList().AsValueEnumerable()
-                             .Where(member => !PruneNode(member, selectedTokens)))
+                             .Where(member => !PruneNode(member, selectedTokens, preserveSharedTypeMembers)))
                     member.Remove();
 
-                return typeDecl.Members.Count > 0 || HasSelectedDeclaration(typeDecl, selectedTokens);
+                return typeDecl.Members.Count > 0
+                       || HasSelectedDeclaration(typeDecl, selectedTokens)
+                       || preserveSharedTypeMembers;
 
             case EntityDeclaration entity:
-                return HasSelectedDeclaration(entity, selectedTokens);
+                return HasSelectedDeclaration(entity, selectedTokens)
+                       || preserveSharedTypeMembers && IsSharedTypeLevelMember(entity);
 
             default:
                 return false;
         }
     }
+
+    private static bool IsSharedTypeLevelMember(EntityDeclaration entity) =>
+        entity switch
+        {
+            FieldDeclaration => true,
+            PropertyDeclaration => true,
+            EventDeclaration => true,
+            IndexerDeclaration => true,
+            OperatorDeclaration => true,
+            ConstructorDeclaration => true,
+            DestructorDeclaration => true,
+            TypeDeclaration => true,
+            DelegateDeclaration => true,
+            _ => false
+        };
 
     private static bool HasSelectedDeclaration(AstNode node, HashSet<EntityHandle> selectedTokens)
     {

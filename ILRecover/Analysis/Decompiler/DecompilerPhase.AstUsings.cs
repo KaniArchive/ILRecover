@@ -11,6 +11,32 @@ namespace ILRecover.Analysis.Decompiler;
 
 public partial class DecompilerPhase
 {
+    private static string RemoveInvalidUsingDirectives(string source)
+    {
+        var normalizedSource = source.Replace("\r\n", "\n");
+        var lines = normalizedSource.Split('\n');
+        var filteredLines = lines
+            .Where(line => !IsInvalidUsingDirective(line))
+            .ToArray();
+
+        return string.Join(Environment.NewLine, filteredLines);
+    }
+
+    private static bool IsInvalidUsingDirective(string line)
+    {
+        var trimmed = line.Trim();
+        if (!trimmed.StartsWith("using ", StringComparison.Ordinal)
+            && !trimmed.StartsWith("global using ", StringComparison.Ordinal))
+            return false;
+
+        if (!trimmed.EndsWith(';'))
+            return false;
+
+        var syntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
+            trimmed + Environment.NewLine + "file class __UsingValidationType {};");
+        return syntaxTree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+    }
+
     private void ResolveFileLocalUsings(SyntaxTree tree, CSharpDecompiler decompiler)
     {
         RemoveExistingUsingDeclarations(tree);
