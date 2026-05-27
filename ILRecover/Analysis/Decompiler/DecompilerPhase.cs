@@ -34,6 +34,7 @@ public partial class DecompilerPhase(
         using var debugInfoProvider = BuildDebugInfoProvider();
         var decompiler = BuildDecompiler(debugInfoProvider);
         var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
+        var preparedTypes = new Dictionary<string, DecompiledTypeCacheEntry>(StringComparer.Ordinal);
 
         var splitTypeNames = mapped
             .AsValueEnumerable()
@@ -59,7 +60,7 @@ public partial class DecompilerPhase(
 
             try
             {
-                var source = DecompileFile(decompiler, file, splitTypeNames);
+                var source = DecompileFile(decompiler, file, splitTypeNames, preparedTypes);
                 if (source is null) continue;
 
                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -134,8 +135,12 @@ public partial class DecompilerPhase(
     private string? DecompileFile(
         CSharpDecompiler decompiler,
         SourceFileMap file,
-        IReadOnlySet<string> splitTypeNames)
+        IReadOnlySet<string> splitTypeNames,
+        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes)
     {
+        if (file.Methods.Count == 0)
+            return DecompileTypeOnlyFile(decompiler, file, splitTypeNames, preparedTypes);
+
         var methodsByType = file.Methods
             .AsValueEnumerable()
             .Where(m => !IsCompilerGenerated(m.TypeFullName))
@@ -154,7 +159,7 @@ public partial class DecompilerPhase(
                 .Select(m => (EntityHandle)m.MethodHandle)
                 .ToHashSet();
 
-            var fullTypeTree = TryDecompileType(decompiler, typeName);
+            var fullTypeTree = TryDecompileType(decompiler, preparedTypes, typeName);
             if (fullTypeTree is null) continue;
 
             var filteredTree = FilterTypeTree(
@@ -177,11 +182,58 @@ public partial class DecompilerPhase(
         return PostProcessSource(file, source);
     }
 
-    private static SyntaxTree? TryDecompileType(CSharpDecompiler decompiler, string typeFullName)
+    private string? DecompileTypeOnlyFile(
+        CSharpDecompiler decompiler,
+        SourceFileMap file,
+        IReadOnlySet<string> splitTypeNames,
+        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes)
+    {
+        var candidateTypeNames = FindTypesForRelativePath(file.RelativePath).ToList();
+        if (candidateTypeNames.Count == 0)
+            return null;
+
+        SyntaxTree? combinedTree = null;
+        foreach (var typeName in candidateTypeNames)
+        {
+            var fullTypeTree = TryDecompileType(decompiler, preparedTypes, typeName);
+            if (fullTypeTree is null)
+                continue;
+
+            var filteredTree = FilterTypeTree(
+                fullTypeTree,
+                [],
+                splitTypeNames.Contains(typeName),
+                preserveSharedTypeMembers: true);
+            if (filteredTree is null)
+                continue;
+
+            combinedTree = combinedTree is null
+                ? filteredTree
+                : MergeSyntaxTrees(combinedTree, filteredTree);
+        }
+
+        if (combinedTree is null)
+            return null;
+
+        ResolveFileLocalUsings(combinedTree, decompiler);
+        var source = SyntaxTreeToString(combinedTree);
+        return PostProcessSource(file, source);
+    }
+
+    private static SyntaxTree? TryDecompileType(
+        CSharpDecompiler decompiler,
+        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes,
+        string typeFullName)
     {
         try
         {
-            return decompiler.DecompileType(new FullTypeName(typeFullName));
+            if (!preparedTypes.TryGetValue(typeFullName, out var entry))
+            {
+                entry = decompiler.DecompileTypeForSlicing(new FullTypeName(typeFullName));
+                preparedTypes[typeFullName] = entry;
+            }
+
+            return entry.CreateClone();
         }
         catch
         {
@@ -193,6 +245,15 @@ public partial class DecompilerPhase(
     {
         var nestedIdx = typeFullName.IndexOf('+');
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
+    }
+
+    private IEnumerable<string> FindTypesForRelativePath(string relativePath)
+    {
+        var normalizedRelativePath = relativePath.Replace('\\', '/');
+        return mapped
+            .Where(file => file.RelativePath.Replace('\\', '/').Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(file => file.DeclaredTypeFullNames ?? file.TypeFullNames)
+            .Distinct(StringComparer.Ordinal);
     }
 
     private bool ShouldPreserveSharedTypeMembers(string relativePath, string rootTypeName)

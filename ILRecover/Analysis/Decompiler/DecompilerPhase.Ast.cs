@@ -71,6 +71,7 @@ public partial class DecompilerPhase
             DestructorDeclaration => true,
             TypeDeclaration => true,
             DelegateDeclaration => true,
+            EnumMemberDeclaration => true,
             _ => false
         };
 

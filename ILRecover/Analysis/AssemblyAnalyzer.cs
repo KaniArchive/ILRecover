@@ -48,14 +48,19 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 .Where(m => !IsCompilerGenerated(m.TypeFullName))
                 .ToList();
 
-            if (userMethods.Count == 0)
+            if (userMethods.Count == 0 && !source.IsGenerated)
             {
                 skipped.Add(source.OriginalPath);
                 continue;
             }
 
             var relative = ToRelativePath(source.OriginalPath, commonSourceRoot);
-            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods));
+            var declaredTypeFullNames = methods
+                .AsValueEnumerable()
+                .Select(method => method.TypeFullName)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods, declaredTypeFullNames));
         }
 
         skipped.AddRange(pdbSources
