@@ -34,19 +34,6 @@ public partial class DecompilerPhase(
         using var debugInfoProvider = BuildDebugInfoProvider();
         var decompiler = BuildDecompiler(debugInfoProvider);
         var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
-        var preparedTypes = new Dictionary<string, DecompiledTypeDocumentInfo>(StringComparer.Ordinal);
-
-        var splitTypeNames = mapped
-            .AsValueEnumerable()
-            .Where(f => !f.IsGenerated)
-            .SelectMany(f => f.TypeFullNames
-                .AsValueEnumerable()
-                .Select(GetRootTypeName)
-                .Distinct(StringComparer.Ordinal))
-            .GroupBy(n => n, StringComparer.Ordinal)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToHashSet(StringComparer.Ordinal);
 
         var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -60,7 +47,7 @@ public partial class DecompilerPhase(
 
             try
             {
-                var source = DecompileFile(decompiler, file, splitTypeNames, preparedTypes);
+                var source = DecompileFile(decompiler, file);
                 if (source is null) continue;
 
                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -132,25 +119,21 @@ public partial class DecompilerPhase(
         return normalized;
     }
 
-    private string? DecompileFile(
-        CSharpDecompiler decompiler,
-        SourceFileMap file,
-        IReadOnlySet<string> splitTypeNames,
-        IDictionary<string, DecompiledTypeDocumentInfo> preparedTypes)
+    private string? DecompileFile(CSharpDecompiler decompiler, SourceFileMap file)
     {
-        var typeNames = file.TypeFullNames
+        var methodsByType = file.Methods
             .AsValueEnumerable()
-            .Select(GetRootTypeName)
-            .Distinct(StringComparer.Ordinal)
+            .Where(method => !IsCompilerGenerated(method.TypeFullName))
+            .GroupBy(method => GetRootTypeName(method.TypeFullName), StringComparer.Ordinal)
             .ToList();
 
-        if (typeNames.Count == 0) return null;
+        if (methodsByType.Count == 0) return null;
 
         SyntaxTree? combinedTree = null;
 
-        foreach (var typeName in typeNames)
+        foreach (var typeGroup in methodsByType)
         {
-            var filteredTree = SliceTypeForFile(decompiler, file, splitTypeNames, preparedTypes, typeName);
+            var filteredTree = SliceTypeForFile(decompiler, file, typeGroup.Key);
             if (filteredTree is null)
                 continue;
 
@@ -170,35 +153,20 @@ public partial class DecompilerPhase(
     private SyntaxTree? SliceTypeForFile(
         CSharpDecompiler decompiler,
         SourceFileMap file,
-        IReadOnlySet<string> splitTypeNames,
-        IDictionary<string, DecompiledTypeDocumentInfo> preparedTypes,
         string typeName)
     {
-        if (!preparedTypes.TryGetValue(typeName, out var documentInfo))
+        try
         {
-            documentInfo = decompiler.DecompileTypeForDocumentSlicing(new FullTypeName(typeName));
-            preparedTypes[typeName] = documentInfo;
+            return decompiler.DecompileTypeToSourceDocumentSlices(
+                    new FullTypeName(typeName),
+                    BuildSourceDocumentSliceRequests(typeName))
+                .FirstOrDefault(slice => slice.DocumentUrl.Equals(file.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                ?.SyntaxTree;
         }
-
-        var normalizedRelativePath = file.RelativePath.Replace('\\', '/');
-        var matchedDocument = documentInfo.MembersByDocument.Keys
-            .FirstOrDefault(path => NormalizeDocumentPath(path).Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase));
-
-        if (matchedDocument is null)
-            return null;
-
-        var slice = decompiler.DecompileTypeToDocumentSlices(new FullTypeName(typeName))
-            .FirstOrDefault(entry => NormalizeDocumentPath(entry.DocumentUrl).Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase));
-        if (slice is null)
-            return null;
-
-        var syntaxTree = slice.SyntaxTree;
-        if (splitTypeNames.Contains(typeName))
+        catch
         {
-            var topLevelType = FindFirstTopLevelType(syntaxTree);
-            topLevelType?.Modifiers |= Modifiers.Partial;
+            return null;
         }
-        return syntaxTree;
     }
 
     private static string GetRootTypeName(string typeFullName)
@@ -207,21 +175,24 @@ public partial class DecompilerPhase(
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
-    private string NormalizeDocumentPath(string documentPath)
+    private List<SourceDocumentSliceRequest> BuildSourceDocumentSliceRequests(string rootTypeName)
     {
-        var normalized = documentPath.Replace('\\', '/');
-
-        foreach (var relativePath in mapped
-                     .Select(file => file.RelativePath.Replace('\\', '/'))
-                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                     .OrderByDescending(path => path.Length))
-        {
-            if (normalized.Equals(relativePath, StringComparison.OrdinalIgnoreCase)
-                || normalized.EndsWith("/" + relativePath, StringComparison.OrdinalIgnoreCase))
-                return relativePath;
-        }
-
-        return normalized;
+        return mapped
+            .Where(file => file.TypeFullNames.Any(typeName => string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
+            .Select(file => new SourceDocumentSliceRequest(
+                file.RelativePath.Replace('\\', '/'),
+                file.Methods
+                    .AsValueEnumerable()
+                    .Where(method => string.Equals(GetRootTypeName(method.TypeFullName), rootTypeName, StringComparison.Ordinal))
+                    .Select(method => (EntityHandle)method.MethodHandle)
+                    .ToList(),
+                file.IsGenerated))
+            .GroupBy(request => request.DocumentPath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new SourceDocumentSliceRequest(
+                group.Key,
+                group.SelectMany(request => request.MemberHandles).Distinct().ToList(),
+                group.All(request => request.IsGenerated)))
+            .ToList();
     }
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
