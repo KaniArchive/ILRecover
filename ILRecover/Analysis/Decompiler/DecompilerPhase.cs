@@ -39,7 +39,7 @@ public partial class DecompilerPhase(
 
         foreach (var file in userFiles)
         {
-            if (file.Methods.Count == 0) continue;
+            if (file.Methods.Count == 0 && (file.TypeDeclarations is null || file.TypeDeclarations.Count == 0)) continue;
 
             var normalizedRelativePath = NormalizeOutputRelativePath(file.RelativePath);
             var outputPath = Path.Combine(outputDir, normalizedRelativePath);
@@ -83,6 +83,7 @@ public partial class DecompilerPhase(
         foreach (var file in sourceFiles.Where(file => !file.IsGenerated))
         {
             var methods = file.Methods.ToList();
+            var typeDeclarations = (file.TypeDeclarations ?? []).ToList();
 
             foreach (var typeFullName in file.TypeFullNames)
             {
@@ -90,13 +91,20 @@ public partial class DecompilerPhase(
                     continue;
 
                 foreach (var companion in companions)
+                {
                     methods.AddRange(companion.Methods);
+                    if (companion.TypeDeclarations is not null)
+                        typeDeclarations.AddRange(companion.TypeDeclarations);
+                }
             }
 
             expanded.Add(file with
             {
                 Methods = methods
                     .DistinctBy(method => method.MethodHandle)
+                    .ToList(),
+                TypeDeclarations = typeDeclarations
+                    .DistinctBy(typeDeclaration => typeDeclaration.TypeHandle)
                     .ToList()
             });
         }
@@ -121,19 +129,20 @@ public partial class DecompilerPhase(
 
     private string? DecompileFile(CSharpDecompiler decompiler, SourceFileMap file)
     {
-        var methodsByType = file.Methods
+        var typeNames = file.TypeFullNames
             .AsValueEnumerable()
-            .Where(method => !IsCompilerGenerated(method.TypeFullName))
-            .GroupBy(method => GetRootTypeName(method.TypeFullName), StringComparer.Ordinal)
+            .Where(typeName => !IsCompilerGenerated(typeName))
+            .Select(GetRootTypeName)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        if (methodsByType.Count == 0) return null;
+        if (typeNames.Count == 0) return null;
 
         SyntaxTree? combinedTree = null;
 
-        foreach (var typeGroup in methodsByType)
+        foreach (var typeName in typeNames)
         {
-            var filteredTree = SliceTypeForFile(decompiler, file, typeGroup.Key);
+            var filteredTree = SliceTypeForFile(decompiler, file, typeName);
             if (filteredTree is null)
                 continue;
 
@@ -186,11 +195,17 @@ public partial class DecompilerPhase(
                     .Where(method => string.Equals(GetRootTypeName(method.TypeFullName), rootTypeName, StringComparison.Ordinal))
                     .Select(method => (EntityHandle)method.MethodHandle)
                     .ToList(),
+                (file.TypeDeclarations ?? [])
+                    .AsValueEnumerable()
+                    .Where(typeDeclaration => string.Equals(GetRootTypeName(typeDeclaration.TypeFullName), rootTypeName, StringComparison.Ordinal))
+                    .Select(typeDeclaration => (EntityHandle)typeDeclaration.TypeHandle)
+                    .ToList(),
                 file.IsGenerated))
             .GroupBy(request => request.DocumentPath, StringComparer.OrdinalIgnoreCase)
             .Select(group => new SourceDocumentSliceRequest(
                 group.Key,
                 group.SelectMany(request => request.MemberHandles).Distinct().ToList(),
+                group.SelectMany(request => request.TypeDeclarationHandles).Distinct().ToList(),
                 group.All(request => request.IsGenerated)))
             .ToList();
     }

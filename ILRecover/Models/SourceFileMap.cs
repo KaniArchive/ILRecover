@@ -7,17 +7,19 @@ public record SourceFileMap(
     string RelativePath,
     bool IsGenerated,
     IReadOnlyList<SourceFileMethodEntry> Methods,
-    IReadOnlyList<string>? DeclaredTypeFullNames = null
+    IReadOnlyList<string>? DeclaredTypeFullNames = null,
+    IReadOnlyList<SourceFileTypeDeclarationEntry>? TypeDeclarations = null
 )
 {
     public IReadOnlyList<string> TypeFullNames =>
-        (DeclaredTypeFullNames is { Count: > 0 }
-            ? DeclaredTypeFullNames
-            : Methods
+        (DeclaredTypeFullNames ?? Methods
                 .AsValueEnumerable()
                 .Select(m => m.TypeFullName)
-                .Distinct(StringComparer.Ordinal)
                 .ToList())
+        .Concat((TypeDeclarations ?? [])
+            .AsValueEnumerable()
+            .Select(entry => entry.TypeFullName)
+            .ToList())
         .Distinct(StringComparer.Ordinal)
         .ToList();
 }

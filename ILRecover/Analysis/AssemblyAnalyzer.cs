@@ -9,6 +9,8 @@ namespace ILRecover.Analysis;
 
 public class AssemblyAnalyzer(string dllPath, string pdbPath)
 {
+    private static readonly Guid TypeDefinitionDocumentKind = new("932E74BC-DBA9-4478-8D46-0F32A7BAB3D3");
+
     private static readonly HashSet<string> StateMachineAttributeNames =
     [
         "System.Runtime.CompilerServices.AsyncStateMachineAttribute",
@@ -35,20 +37,28 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             .GroupBy(s => NormalizePath(s.OriginalPath))
             .ToDictionary(g => g.Key, g => g.First());
 
+        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(pdbPath, typeNames, sourceByNormalizedPath);
+
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();
 
-        foreach (var (normalizedDoc, methods) in docToMethods)
+        foreach (var normalizedDoc in docToMethods.Keys.Concat(typeDeclarationsByDocument.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!sourceByNormalizedPath.TryGetValue(normalizedDoc, out var source))
                 continue;
+
+            docToMethods.TryGetValue(normalizedDoc, out var methods);
+            methods ??= [];
 
             var userMethods = methods
                 .AsValueEnumerable()
                 .Where(m => !IsCompilerGenerated(m.TypeFullName))
                 .ToList();
 
-            if (userMethods.Count == 0 && !source.IsGenerated)
+            typeDeclarationsByDocument.TryGetValue(normalizedDoc, out var typeDeclarations);
+            typeDeclarations ??= [];
+
+            if (userMethods.Count == 0 && typeDeclarations.Count == 0 && !source.IsGenerated)
             {
                 skipped.Add(source.OriginalPath);
                 continue;
@@ -58,14 +68,16 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             var declaredTypeFullNames = methods
                 .AsValueEnumerable()
                 .Select(method => method.TypeFullName)
+                .Concat(typeDeclarations.AsValueEnumerable().Select(typeDeclaration => typeDeclaration.TypeFullName))
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods, declaredTypeFullNames));
+            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods, declaredTypeFullNames, typeDeclarations));
         }
 
         skipped.AddRange(pdbSources
             .AsValueEnumerable()
-            .Where(source => !docToMethods.ContainsKey(NormalizePath(source.OriginalPath)))
+            .Where(source => !docToMethods.ContainsKey(NormalizePath(source.OriginalPath))
+                             && !typeDeclarationsByDocument.ContainsKey(NormalizePath(source.OriginalPath)))
             .Select(source => source.OriginalPath)
             .ToList());
 
@@ -151,6 +163,75 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         }
 
         return result;
+    }
+
+
+    private static Dictionary<string, List<SourceFileTypeDeclarationEntry>> BuildTypeDeclarationDocumentMap(
+        string pdbPath,
+        IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        var result = new Dictionary<string, List<SourceFileTypeDeclarationEntry>>(StringComparer.OrdinalIgnoreCase);
+
+        using var pdbFs = File.OpenRead(pdbPath);
+        using var pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbFs);
+        var pdbReader = pdbProvider.GetMetadataReader();
+
+        foreach (var customDebugHandle in pdbReader.CustomDebugInformation)
+        {
+            var customDebugInfo = pdbReader.GetCustomDebugInformation(customDebugHandle);
+            if (customDebugInfo.Parent.Kind != HandleKind.TypeDefinition || customDebugInfo.Kind.IsNil || customDebugInfo.Value.IsNil)
+                continue;
+
+            if (pdbReader.GetGuid(customDebugInfo.Kind) != TypeDefinitionDocumentKind)
+                continue;
+
+            var typeHandle = (TypeDefinitionHandle)customDebugInfo.Parent;
+            if (!typeNames.TryGetValue(typeHandle, out var typeName) || IsCompilerGenerated(typeName))
+                continue;
+
+            var ownerDocument = ReadTypeDefinitionDocuments(pdbReader, customDebugInfo.Value)
+                .Where(sourceByNormalizedPath.ContainsKey)
+                .OrderBy(document => sourceByNormalizedPath[document].IsGenerated)
+                .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(ownerDocument))
+                continue;
+
+            if (!result.TryGetValue(ownerDocument, out var declarations))
+            {
+                declarations = [];
+                result[ownerDocument] = declarations;
+            }
+
+            declarations.Add(new SourceFileTypeDeclarationEntry(typeName, typeHandle));
+        }
+
+        return result;
+    }
+
+
+    private static List<string> ReadTypeDefinitionDocuments(MetadataReader reader, BlobHandle value)
+    {
+        var documents = new List<string>();
+        var blobReader = reader.GetBlobReader(value);
+        while (blobReader.RemainingBytes > 0)
+        {
+            var documentRowId = blobReader.ReadCompressedInteger();
+            if (documentRowId <= 0)
+                continue;
+
+            var documentHandle = MetadataTokens.DocumentHandle(documentRowId);
+            if (documentHandle.IsNil)
+                continue;
+
+            var documentPath = reader.GetString(reader.GetDocument(documentHandle).Name);
+            if (!string.IsNullOrWhiteSpace(documentPath))
+                documents.Add(NormalizePath(documentPath));
+        }
+
+        return documents;
     }
 
 
