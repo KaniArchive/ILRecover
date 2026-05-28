@@ -34,7 +34,7 @@ public partial class DecompilerPhase(
         using var debugInfoProvider = BuildDebugInfoProvider();
         var decompiler = BuildDecompiler(debugInfoProvider);
         var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
-        var preparedTypes = new Dictionary<string, DecompiledTypeCacheEntry>(StringComparer.Ordinal);
+        var preparedTypes = new Dictionary<string, DecompiledTypeDocumentInfo>(StringComparer.Ordinal);
 
         var splitTypeNames = mapped
             .AsValueEnumerable()
@@ -71,7 +71,7 @@ public partial class DecompilerPhase(
             }
             catch (Exception ex)
             {
-                Log.Error($"skip: {normalizedRelativePath} ({ex.Message})");
+                Log.Error($"Skip: {normalizedRelativePath} ({ex.Message})");
             }
         }
     }
@@ -136,74 +136,21 @@ public partial class DecompilerPhase(
         CSharpDecompiler decompiler,
         SourceFileMap file,
         IReadOnlySet<string> splitTypeNames,
-        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes)
+        IDictionary<string, DecompiledTypeDocumentInfo> preparedTypes)
     {
-        if (file.Methods.Count == 0)
-            return DecompileTypeOnlyFile(decompiler, file, splitTypeNames, preparedTypes);
-
-        var methodsByType = file.Methods
+        var typeNames = file.TypeFullNames
             .AsValueEnumerable()
-            .Where(m => !IsCompilerGenerated(m.TypeFullName))
-            .GroupBy(m => GetRootTypeName(m.TypeFullName), StringComparer.Ordinal)
+            .Select(GetRootTypeName)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        if (methodsByType.Count == 0) return null;
+        if (typeNames.Count == 0) return null;
 
         SyntaxTree? combinedTree = null;
 
-        foreach (var typeGroup in methodsByType)
+        foreach (var typeName in typeNames)
         {
-            var typeName = typeGroup.Key;
-            var selectedTokens = typeGroup
-                .AsValueEnumerable()
-                .Select(m => (EntityHandle)m.MethodHandle)
-                .ToHashSet();
-
-            var fullTypeTree = TryDecompileType(decompiler, preparedTypes, typeName);
-            if (fullTypeTree is null) continue;
-
-            var filteredTree = FilterTypeTree(
-                fullTypeTree,
-                selectedTokens,
-                splitTypeNames.Contains(typeName),
-                ShouldPreserveSharedTypeMembers(file.RelativePath, typeName));
-            if (filteredTree is null) continue;
-
-            combinedTree = combinedTree is null
-                ? filteredTree
-                : MergeSyntaxTrees(combinedTree, filteredTree);
-        }
-
-        if (combinedTree is null)
-            return null;
-
-        ResolveFileLocalUsings(combinedTree, decompiler);
-        var source = SyntaxTreeToString(combinedTree);
-        return PostProcessSource(file, source);
-    }
-
-    private string? DecompileTypeOnlyFile(
-        CSharpDecompiler decompiler,
-        SourceFileMap file,
-        IReadOnlySet<string> splitTypeNames,
-        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes)
-    {
-        var candidateTypeNames = FindTypesForRelativePath(file.RelativePath).ToList();
-        if (candidateTypeNames.Count == 0)
-            return null;
-
-        SyntaxTree? combinedTree = null;
-        foreach (var typeName in candidateTypeNames)
-        {
-            var fullTypeTree = TryDecompileType(decompiler, preparedTypes, typeName);
-            if (fullTypeTree is null)
-                continue;
-
-            var filteredTree = FilterTypeTree(
-                fullTypeTree,
-                [],
-                splitTypeNames.Contains(typeName),
-                preserveSharedTypeMembers: true);
+            var filteredTree = SliceTypeForFile(decompiler, file, splitTypeNames, preparedTypes, typeName);
             if (filteredTree is null)
                 continue;
 
@@ -220,25 +167,38 @@ public partial class DecompilerPhase(
         return PostProcessSource(file, source);
     }
 
-    private static SyntaxTree? TryDecompileType(
+    private SyntaxTree? SliceTypeForFile(
         CSharpDecompiler decompiler,
-        IDictionary<string, DecompiledTypeCacheEntry> preparedTypes,
-        string typeFullName)
+        SourceFileMap file,
+        IReadOnlySet<string> splitTypeNames,
+        IDictionary<string, DecompiledTypeDocumentInfo> preparedTypes,
+        string typeName)
     {
-        try
+        if (!preparedTypes.TryGetValue(typeName, out var documentInfo))
         {
-            if (!preparedTypes.TryGetValue(typeFullName, out var entry))
-            {
-                entry = decompiler.DecompileTypeForSlicing(new FullTypeName(typeFullName));
-                preparedTypes[typeFullName] = entry;
-            }
+            documentInfo = decompiler.DecompileTypeForDocumentSlicing(new FullTypeName(typeName));
+            preparedTypes[typeName] = documentInfo;
+        }
 
-            return entry.CreateClone();
-        }
-        catch
-        {
+        var normalizedRelativePath = file.RelativePath.Replace('\\', '/');
+        var matchedDocument = documentInfo.MembersByDocument.Keys
+            .FirstOrDefault(path => NormalizeDocumentPath(path).Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase));
+
+        if (matchedDocument is null)
             return null;
+
+        var slice = decompiler.DecompileTypeToDocumentSlices(new FullTypeName(typeName))
+            .FirstOrDefault(entry => NormalizeDocumentPath(entry.DocumentUrl).Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase));
+        if (slice is null)
+            return null;
+
+        var syntaxTree = slice.SyntaxTree;
+        if (splitTypeNames.Contains(typeName))
+        {
+            var topLevelType = FindFirstTopLevelType(syntaxTree);
+            topLevelType?.Modifiers |= Modifiers.Partial;
         }
+        return syntaxTree;
     }
 
     private static string GetRootTypeName(string typeFullName)
@@ -247,38 +207,21 @@ public partial class DecompilerPhase(
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
-    private IEnumerable<string> FindTypesForRelativePath(string relativePath)
+    private string NormalizeDocumentPath(string documentPath)
     {
-        var normalizedRelativePath = relativePath.Replace('\\', '/');
-        return mapped
-            .Where(file => file.RelativePath.Replace('\\', '/').Equals(normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(file => file.DeclaredTypeFullNames ?? file.TypeFullNames)
-            .Distinct(StringComparer.Ordinal);
-    }
+        var normalized = documentPath.Replace('\\', '/');
 
-    private bool ShouldPreserveSharedTypeMembers(string relativePath, string rootTypeName)
-    {
-        var normalizedRelativePath = relativePath.Replace('\\', '/');
-        return string.Equals(normalizedRelativePath, GetSharedTypeMemberCarrierPath(rootTypeName), StringComparison.OrdinalIgnoreCase);
-    }
+        foreach (var relativePath in mapped
+                     .Select(file => file.RelativePath.Replace('\\', '/'))
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .OrderByDescending(path => path.Length))
+        {
+            if (normalized.Equals(relativePath, StringComparison.OrdinalIgnoreCase)
+                || normalized.EndsWith("/" + relativePath, StringComparison.OrdinalIgnoreCase))
+                return relativePath;
+        }
 
-    private string? GetSharedTypeMemberCarrierPath(string rootTypeName)
-    {
-        var simpleTypeName = rootTypeName[(rootTypeName.LastIndexOf('.') + 1)..];
-        var candidates = mapped
-            .Where(file => !file.IsGenerated
-                           && file.TypeFullNames.Any(typeName => string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
-            .Select(file => file.RelativePath.Replace('\\', '/'))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return candidates
-            .OrderByDescending(path => path.EndsWith('/' + simpleTypeName + ".cs", StringComparison.OrdinalIgnoreCase)
-                                       || string.Equals(path, simpleTypeName + ".cs", StringComparison.OrdinalIgnoreCase))
-            .ThenBy(path => path.Count(ch => ch == '/'))
-            .ThenBy(path => path.Length)
-            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
+        return normalized;
     }
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
@@ -331,27 +274,14 @@ public partial class DecompilerPhase(
     private void AddResolverSearchDirectories(UniversalAssemblyResolver resolver)
     {
         var dllDirectory = Path.GetDirectoryName(dllPath);
-        if (string.IsNullOrWhiteSpace(dllDirectory))
+        if (!string.IsNullOrWhiteSpace(dllDirectory) && Directory.Exists(dllDirectory))
+            resolver.AddSearchDirectory(dllDirectory);
+
+        if (dependencySearchDirs is null || dependencySearchDirs.Count == 0)
+        {
+            Log.Warning("No dependency search directories were provided. Use -dp to resolve referenced assemblies");
             return;
-
-        var candidateDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            dllDirectory
-        };
-
-        var parentDirectory = Directory.GetParent(dllDirectory)?.FullName;
-        if (!string.IsNullOrWhiteSpace(parentDirectory))
-        {
-            candidateDirs.Add(parentDirectory);
-            candidateDirs.Add(Path.Combine(parentDirectory, "OR"));
-            candidateDirs.Add(Path.Combine(parentDirectory, "Source"));
         }
-
-        foreach (var candidateDir in candidateDirs.Where(Directory.Exists))
-            resolver.AddSearchDirectory(candidateDir);
-
-        if (dependencySearchDirs is null)
-            return;
 
         foreach (var dependencyDir in dependencySearchDirs)
         {
@@ -361,6 +291,8 @@ public partial class DecompilerPhase(
             var fullPath = Path.GetFullPath(dependencyDir);
             if (Directory.Exists(fullPath))
                 resolver.AddSearchDirectory(fullPath);
+            else
+                Log.Warning($"Dependency search directory not found: {fullPath}");
         }
     }
 

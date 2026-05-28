@@ -6,25 +6,15 @@ namespace ILRecover.Analysis.Decompiler;
 
 public partial class DecompilerPhase
 {
-    private static string RemoveIlComments(string source)
-    {
-        var lines = source.Replace("\r\n", "\n").Split('\n');
-        return lines.AsValueEnumerable()
-            .Where(line => !line.TrimStart().StartsWith("//IL_", StringComparison.Ordinal))
-            .JoinToString(Environment.NewLine);
-    }
-
     private static string NormalizeTopLevelSpacing(string source) =>
         ModifierRegex().Replace(source, "}" + Environment.NewLine + Environment.NewLine);
 
     private string PostProcessSource(SourceFileMap file, string source)
     {
         source = RemoveDecompilerNoiseAttributes(source);
+        source = NormalizeGeneratedMainMethodName(source);
         source = RemoveInvalidUsingDirectives(source);
         source = FixInvalidRefMemberAccess(source);
-
-        if (Path.GetFileName(file.RelativePath).Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
-            source = RewriteCompilerGeneratedProgram(source);
 
         source = FormatSource(source);
         source = FixInvalidRefMemberAccess(source);
@@ -34,68 +24,14 @@ public partial class DecompilerPhase
     private static string RemoveDecompilerNoiseAttributes(string source) =>
         NoiseAttributeRegex().Replace(source, string.Empty);
 
-    private static string RewriteCompilerGeneratedProgram(string source)
-    {
-        var signatureMatch = SignatureRegex().Match(source);
-
-        if (!signatureMatch.Success)
-            return source;
-
-        var bodyStart = source.IndexOf('{', signatureMatch.Index);
-        if (bodyStart < 0)
-            return source;
-
-        var bodyEnd = FindMatchingBrace(source, bodyStart);
-        if (bodyEnd < 0)
-            return source;
-
-        var body = source[(bodyStart + 1)..bodyEnd];
-        body = UnindentOneLevel(body).Trim();
-
-        return body + Environment.NewLine;
-    }
-
-    private static int FindMatchingBrace(string text, int openBraceIndex)
-    {
-        var depth = 0;
-        for (var i = openBraceIndex; i < text.Length; i++)
-        {
-            var ch = text[i];
-            switch (ch)
-            {
-                case '{':
-                    depth++;
-                    break;
-                case '}':
-                {
-                    depth--;
-                    if (depth == 0)
-                        return i;
-                    break;
-                }
-            }
-        }
-
-        return -1;
-    }
-
-    private static string UnindentOneLevel(string text)
-    {
-        var lines = text.Replace("\r\n", "\n").Split('\n');
-        for (var i = 0; i < lines.Length; i++)
-            if (lines[i].StartsWith('\t'))
-                lines[i] = lines[i][1..];
-            else if (lines[i].StartsWith("    ", StringComparison.Ordinal))
-                lines[i] = lines[i][4..];
-
-        return string.Join(Environment.NewLine, lines);
-    }
+    private static string NormalizeGeneratedMainMethodName(string source) =>
+        GeneratedMainMethodNameRegex().Replace(source, "Main");
 
     private static string FixInvalidRefMemberAccess(string source) =>
         InvalidRefMemberAccessRegex().Replace(source, "$1.$2");
 
-    [GeneratedRegex(@"private\s+static\s+async\s+Task\s+<Main>\$\s*\(string\[\]\s+args\)", RegexOptions.Multiline)]
-    private static partial Regex SignatureRegex();
+    [GeneratedRegex(@"<Main>\$", RegexOptions.Multiline)]
+    private static partial Regex GeneratedMainMethodNameRegex();
 
     [GeneratedRegex(
         @"\}(\r?\n)(?=(\[|public\b|internal\b|protected\b|private\b|sealed\b|abstract\b|static\b|partial\b|class\b|struct\b|interface\b|enum\b|record\b))")]
