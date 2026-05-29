@@ -46,7 +46,8 @@ public class CsprojBuilder(
         var hints = classified.AsValueEnumerable().Where(r => r.Kind == ReferenceKind.Hint).ToList();
         var projRefs = knownProjectRefs
             .AsValueEnumerable()
-            .Where(p => classified.AsValueEnumerable().Any(r => r.AssemblyName == p.AssemblyName && r.Kind == ReferenceKind.ProjectRef))
+            .Where(p => classified.AsValueEnumerable()
+                .Any(r => r.AssemblyName == p.AssemblyName && r.Kind == ReferenceKind.ProjectRef))
             .ToList();
 
         var sb = new StringBuilder();

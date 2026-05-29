@@ -2,10 +2,14 @@ using System.Collections.Immutable;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.Resolver;
 using ICSharpCode.Decompiler.CSharp.Syntax;
-using ICSharpCode.Decompiler.CSharp.Transforms;
 using ICSharpCode.Decompiler.CSharp.TypeSystem;
 using ICSharpCode.Decompiler.Semantics;
 using ICSharpCode.Decompiler.TypeSystem;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using ZLinq;
+using Attribute = ICSharpCode.Decompiler.CSharp.Syntax.Attribute;
+using SyntaxTree = ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree;
 
 namespace ILRecover.Analysis.Decompiler;
 
@@ -16,6 +20,7 @@ public partial class DecompilerPhase
         var normalizedSource = source.Replace("\r\n", "\n");
         var lines = normalizedSource.Split('\n');
         var filteredLines = lines
+            .AsValueEnumerable()
             .Where(line => !IsInvalidUsingDirective(line))
             .ToArray();
 
@@ -32,9 +37,9 @@ public partial class DecompilerPhase
         if (!trimmed.EndsWith(';'))
             return false;
 
-        var syntaxTree = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(
+        var syntaxTree = CSharpSyntaxTree.ParseText(
             trimmed + Environment.NewLine + "file class __UsingValidationType {};");
-        return syntaxTree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        return syntaxTree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
     }
 
     private void ResolveFileLocalUsings(SyntaxTree tree, CSharpDecompiler decompiler)
@@ -69,15 +74,19 @@ public partial class DecompilerPhase
         if (importedNamespaces.Count == 0)
             return;
 
-        var insertionPoint = tree.Children.LastOrDefault(node => node is PreProcessorDirective directive
-            && directive.Type == PreProcessorDirectiveType.Define);
+        var insertionPoint = tree.Children.LastOrDefault(node => node is PreProcessorDirective
+        {
+            Type: PreProcessorDirectiveType.Define
+        });
 
         foreach (var namespaceName in importedNamespaces
                      .OrderBy(name => name.StartsWith("System", StringComparison.Ordinal) ? 0 : 1)
                      .ThenBy(name => name, StringComparer.Ordinal))
         {
             tree.InsertChildAfter(insertionPoint, new UsingDeclaration(namespaceName), SyntaxTree.MemberRole);
-            insertionPoint = insertionPoint is null ? tree.Children.FirstOrDefault(node => node is UsingDeclaration) : insertionPoint.NextSibling;
+            insertionPoint = insertionPoint is null
+                ? tree.Children.FirstOrDefault(node => node is UsingDeclaration)
+                : insertionPoint.NextSibling;
         }
     }
 
@@ -88,7 +97,9 @@ public partial class DecompilerPhase
         IImmutableSet<string> importedNamespaces)
     {
         var usingScope = CreateUsingScope(decompiler, currentTypeDefinition.Namespace, importedNamespaces);
-        var resolver = new CSharpResolver(new CSharpTypeResolveContext(decompiler.TypeSystem.MainModule, usingScope, currentTypeDefinition));
+        var resolver =
+            new CSharpResolver(new CSharpTypeResolveContext(decompiler.TypeSystem.MainModule, usingScope,
+                currentTypeDefinition));
         var astBuilder = new TypeSystemAstBuilder(resolver)
         {
             AlwaysUseShortTypeNames = true,
@@ -101,7 +112,8 @@ public partial class DecompilerPhase
         tree.AcceptVisitor(new FileLocalTypeQualificationVisitor(astBuilder));
     }
 
-    private UsingScope CreateUsingScope(CSharpDecompiler decompiler, string currentNamespace, IImmutableSet<string> importedNamespaces)
+    private UsingScope CreateUsingScope(CSharpDecompiler decompiler, string currentNamespace,
+        IImmutableSet<string> importedNamespaces)
     {
         var resolvedNamespaces = importedNamespaces
             .Select(namespaceName => decompiler.TypeSystem.GetNamespaceByFullName(namespaceName))
@@ -120,7 +132,8 @@ public partial class DecompilerPhase
     }
 
     private static ITypeDefinition? FindPrimaryTypeDefinition(SyntaxTree tree) =>
-        tree.GetTypes(includeInnerTypes: false)
+        tree.GetTypes()
+            .AsValueEnumerable()
             .Select(typeDeclaration => typeDeclaration.GetSymbol() as ITypeDefinition)
             .FirstOrDefault(typeDefinition => typeDefinition is not null);
 
@@ -128,23 +141,21 @@ public partial class DecompilerPhase
     {
         var usedNamespaces = new HashSet<string>(StringComparer.Ordinal);
         foreach (var type in tree.Descendants.OfType<AstType>())
-        {
             switch (type.GetResolveResult())
             {
-                case TypeResolveResult typeResolveResult when !string.IsNullOrWhiteSpace(typeResolveResult.Type.Namespace):
+                case TypeResolveResult typeResolveResult
+                    when !string.IsNullOrWhiteSpace(typeResolveResult.Type.Namespace):
                     usedNamespaces.Add(typeResolveResult.Type.Namespace);
                     break;
-                case NamespaceResolveResult namespaceResolveResult when !string.IsNullOrWhiteSpace(namespaceResolveResult.Namespace.FullName):
+                case NamespaceResolveResult namespaceResolveResult
+                    when !string.IsNullOrWhiteSpace(namespaceResolveResult.Namespace.FullName):
                     usedNamespaces.Add(namespaceResolveResult.Namespace.FullName);
                     break;
             }
-        }
 
         foreach (var usingDeclaration in tree.Children.OfType<UsingDeclaration>().ToList())
-        {
             if (!usedNamespaces.Contains(usingDeclaration.Namespace))
                 usingDeclaration.Remove();
-        }
     }
 
     private sealed class FileLocalImportCollector(string currentNamespace) : DepthFirstAstVisitor
@@ -226,7 +237,7 @@ public partial class DecompilerPhase
             AstType replacement;
             try
             {
-                replacement = type.Parent is ICSharpCode.Decompiler.CSharp.Syntax.Attribute
+                replacement = type.Parent is Attribute
                     ? astBuilder.ConvertAttributeType(typeResolveResult.Type)
                     : astBuilder.ConvertType(typeResolveResult.Type);
             }

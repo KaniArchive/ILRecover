@@ -1,7 +1,5 @@
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
-using ICSharpCode.Decompiler.CSharp.Syntax;
 using Microsoft.CodeAnalysis;
 using ZLinq;
 using DiagnosticSeverity = Microsoft.CodeAnalysis.DiagnosticSeverity;
@@ -140,13 +138,12 @@ public partial class DecompilerPhase
             yield break;
 
         foreach (var frameworkDirectory in Directory.EnumerateDirectories(sharedRoot))
-        {
-            foreach (var versionDirectory in Directory.EnumerateDirectories(frameworkDirectory))
-                yield return versionDirectory;
-        }
+        foreach (var versionDirectory in Directory.EnumerateDirectories(frameworkDirectory))
+            yield return versionDirectory;
     }
 
-    private sealed class SelfReferencingGenericMemberAccessRewriter(SemanticModel semanticModel) : RoslynCSharp.CSharpSyntaxRewriter
+    private sealed class SelfReferencingGenericMemberAccessRewriter(SemanticModel semanticModel)
+        : RoslynCSharp.CSharpSyntaxRewriter
     {
         public override SyntaxNode VisitMemberAccessExpression(RoslynSyntax.MemberAccessExpressionSyntax node)
         {
@@ -156,10 +153,12 @@ public partial class DecompilerPhase
 
             var targetTypeSyntax = genericName.TypeArgumentList.Arguments[0];
             var targetTypeSymbol = semanticModel.GetTypeInfo(targetTypeSyntax).Type;
-            if (targetTypeSymbol is null || !InheritsSelfReferencingGenericBase(targetTypeSymbol, genericName.Identifier.ValueText))
+            if (targetTypeSymbol is null ||
+                !InheritsSelfReferencingGenericBase(targetTypeSymbol, genericName.Identifier.ValueText))
                 return base.VisitMemberAccessExpression(node)!;
 
-            var rewrittenNode = (RoslynSyntax.MemberAccessExpressionSyntax)(base.VisitMemberAccessExpression(node) ?? node);
+            var rewrittenNode =
+                (RoslynSyntax.MemberAccessExpressionSyntax)(base.VisitMemberAccessExpression(node) ?? node);
 
             return RoslynCSharp.SyntaxFactory.MemberAccessExpression(
                 RoslynCSharp.SyntaxKind.SimpleMemberAccessExpression,
@@ -251,5 +250,4 @@ public partial class DecompilerPhase
             nameSyntax.ToString() is "CallerMemberName" or "CallerMemberNameAttribute"
                 or "System.Runtime.CompilerServices.CallerMemberNameAttribute";
     }
-
 }

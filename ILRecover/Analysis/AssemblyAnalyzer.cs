@@ -42,7 +42,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();
 
-        foreach (var normalizedDoc in docToMethods.Keys.Concat(typeDeclarationsByDocument.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var normalizedDoc in docToMethods.Keys.Concat(typeDeclarationsByDocument.Keys)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!sourceByNormalizedPath.TryGetValue(normalizedDoc, out var source))
                 continue;
@@ -71,7 +72,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 .Concat(typeDeclarations.AsValueEnumerable().Select(typeDeclaration => typeDeclaration.TypeFullName))
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
-            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods, declaredTypeFullNames, typeDeclarations));
+            mapped.Add(new SourceFileMap(source.OriginalPath, relative, source.IsGenerated, userMethods,
+                declaredTypeFullNames, typeDeclarations));
         }
 
         skipped.AddRange(pdbSources
@@ -180,7 +182,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         foreach (var customDebugHandle in pdbReader.CustomDebugInformation)
         {
             var customDebugInfo = pdbReader.GetCustomDebugInformation(customDebugHandle);
-            if (customDebugInfo.Parent.Kind != HandleKind.TypeDefinition || customDebugInfo.Kind.IsNil || customDebugInfo.Value.IsNil)
+            if (customDebugInfo.Parent.Kind != HandleKind.TypeDefinition || customDebugInfo.Kind.IsNil ||
+                customDebugInfo.Value.IsNil)
                 continue;
 
             if (pdbReader.GetGuid(customDebugInfo.Kind) != TypeDefinitionDocumentKind)

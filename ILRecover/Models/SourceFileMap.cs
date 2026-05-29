@@ -13,9 +13,9 @@ public record SourceFileMap(
 {
     public IReadOnlyList<string> TypeFullNames =>
         (DeclaredTypeFullNames ?? Methods
-                .AsValueEnumerable()
-                .Select(m => m.TypeFullName)
-                .ToList())
+            .AsValueEnumerable()
+            .Select(m => m.TypeFullName)
+            .ToList())
         .Concat((TypeDeclarations ?? [])
             .AsValueEnumerable()
             .Select(entry => entry.TypeFullName)

@@ -1,9 +1,9 @@
+using ICSharpCode.Decompiler.Metadata;
 using ILRecover.Analysis;
 using ILRecover.Analysis.Csproj;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
 using ILRecover.Models;
-using ICSharpCode.Decompiler.Metadata;
 using ZLinq;
 
 namespace ILRecover.CLI;
@@ -52,7 +52,8 @@ public static class Parser
             builder.Build();
 
             Log.Info("Decompiling...");
-            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dependencyDirs, editorConfig, target.PdbPath);
+            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dependencyDirs,
+                editorConfig, target.PdbPath);
             phase.Run();
 
             Log.Info($"Done: {outputDir}");
@@ -109,7 +110,8 @@ public static class Parser
         var assemblyReferences = file.Metadata.AssemblyReferences
             .Select(handle => file.Metadata.GetString(file.Metadata.GetAssemblyReference(handle).Name));
 
-        return assemblyReferences.Any(name => name.StartsWith("Microsoft.AspNetCore", StringComparison.OrdinalIgnoreCase))
+        return assemblyReferences.Any(name =>
+            name.StartsWith("Microsoft.AspNetCore", StringComparison.OrdinalIgnoreCase))
             ? "Microsoft.NET.Sdk.Web"
             : "Microsoft.NET.Sdk";
     }

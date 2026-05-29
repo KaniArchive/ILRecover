@@ -8,24 +8,23 @@ namespace ILRecover.Pdb;
 public sealed class PortablePdbDebugInfoProvider : IDebugInfoProvider, IDisposable
 {
     private readonly string _moduleFileName;
-    private readonly string _pdbPath;
-    private readonly FileStream _stream;
     private readonly MetadataReaderProvider _provider;
+    private readonly FileStream _stream;
     private bool _hasError;
 
     public PortablePdbDebugInfoProvider(string moduleFileName, string pdbPath)
     {
         _moduleFileName = moduleFileName;
-        _pdbPath = pdbPath;
+        SourceFileName = pdbPath;
         _stream = File.OpenRead(pdbPath);
         _provider = MetadataReaderProvider.FromPortablePdbStream(_stream);
     }
 
     public string Description => _hasError
-        ? $"Error while loading portable PDB: {_pdbPath}"
-        : $"Loaded from portable PDB: {_pdbPath}";
+        ? $"Error while loading portable PDB: {SourceFileName}"
+        : $"Loaded from portable PDB: {SourceFileName}";
 
-    public string SourceFileName => _pdbPath;
+    public string SourceFileName { get; }
 
     public IList<DecompilerSequencePoint> GetSequencePoints(MethodDefinitionHandle method)
     {

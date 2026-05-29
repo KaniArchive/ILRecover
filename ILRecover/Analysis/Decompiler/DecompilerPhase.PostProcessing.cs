@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using ILRecover.Models;
-using ZLinq;
 
 namespace ILRecover.Analysis.Decompiler;
 

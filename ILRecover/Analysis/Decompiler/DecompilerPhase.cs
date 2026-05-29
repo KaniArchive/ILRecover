@@ -1,14 +1,15 @@
 using System.Reflection.Metadata;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
-using ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ILRecover.Helpers;
 using ILRecover.Models;
 using ILRecover.Pdb;
+using Microsoft.CodeAnalysis;
 using ZLinq;
+using SyntaxTree = ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree;
 
 namespace ILRecover.Analysis.Decompiler;
 
@@ -22,12 +23,15 @@ public partial class DecompilerPhase(
     string? pdbPath = null)
 {
     private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
-    private readonly string? _editorConfigPath = string.IsNullOrWhiteSpace(editorConfigPath) ? null : Path.GetFullPath(editorConfigPath);
-    private IReadOnlyList<Microsoft.CodeAnalysis.MetadataReference>? _formattingReferences;
-    private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
+
+    private readonly string? _editorConfigPath =
+        string.IsNullOrWhiteSpace(editorConfigPath) ? null : Path.GetFullPath(editorConfigPath);
+
+    private IReadOnlyList<MetadataReference>? _formattingReferences;
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;
-    private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndexByArity;
+    private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
+    private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
 
     public void Run()
     {
@@ -39,7 +43,8 @@ public partial class DecompilerPhase(
 
         foreach (var file in userFiles)
         {
-            if (file.Methods.Count == 0 && (file.TypeDeclarations is null || file.TypeDeclarations.Count == 0)) continue;
+            if (file.Methods.Count == 0 &&
+                (file.TypeDeclarations is null || file.TypeDeclarations.Count == 0)) continue;
 
             var normalizedRelativePath = NormalizeOutputRelativePath(file.RelativePath);
             var outputPath = Path.Combine(outputDir, normalizedRelativePath);
@@ -67,7 +72,8 @@ public partial class DecompilerPhase(
     {
         var generatedCompanionsByType = sourceFiles
             .AsValueEnumerable()
-            .Where(file => file.IsGenerated && file.OriginalPath.Contains("/Generated/", StringComparison.OrdinalIgnoreCase))
+            .Where(file =>
+                file.IsGenerated && file.OriginalPath.Contains("/Generated/", StringComparison.OrdinalIgnoreCase))
             .SelectMany(file => file.TypeFullNames
                 .AsValueEnumerable()
                 .Distinct(StringComparer.Ordinal)
@@ -169,7 +175,8 @@ public partial class DecompilerPhase(
             return decompiler.DecompileTypeToSourceDocumentSlices(
                     new FullTypeName(typeName),
                     BuildSourceDocumentSliceRequests(typeName))
-                .FirstOrDefault(slice => slice.DocumentUrl.Equals(file.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault(slice =>
+                    slice.DocumentUrl.Equals(file.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
                 ?.SyntaxTree;
         }
         catch
@@ -184,22 +191,25 @@ public partial class DecompilerPhase(
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
-    private List<SourceDocumentSliceRequest> BuildSourceDocumentSliceRequests(string rootTypeName)
-    {
-        return mapped
-            .Where(file => file.TypeFullNames.Any(typeName => string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
+    private List<SourceDocumentSliceRequest> BuildSourceDocumentSliceRequests(string rootTypeName) =>
+        mapped
+            .AsValueEnumerable()
+            .Where(file => file.TypeFullNames.Any(typeName =>
+                string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
             .Select(file => new SourceDocumentSliceRequest(
                 file.RelativePath.Replace('\\', '/'),
                 file.Methods
                     .AsValueEnumerable()
-                    .Where(method => string.Equals(GetRootTypeName(method.TypeFullName), rootTypeName, StringComparison.Ordinal))
+                    .Where(method => string.Equals(GetRootTypeName(method.TypeFullName), rootTypeName,
+                        StringComparison.Ordinal))
                     .Select(method => (EntityHandle)method.MethodHandle)
                     .ToList(),
                 (file.TypeDeclarations ?? [])
-                    .AsValueEnumerable()
-                    .Where(typeDeclaration => string.Equals(GetRootTypeName(typeDeclaration.TypeFullName), rootTypeName, StringComparison.Ordinal))
-                    .Select(typeDeclaration => (EntityHandle)typeDeclaration.TypeHandle)
-                    .ToList(),
+                .AsValueEnumerable()
+                .Where(typeDeclaration => string.Equals(GetRootTypeName(typeDeclaration.TypeFullName), rootTypeName,
+                    StringComparison.Ordinal))
+                .Select(typeDeclaration => (EntityHandle)typeDeclaration.TypeHandle)
+                .ToList(),
                 file.IsGenerated))
             .GroupBy(request => request.DocumentPath, StringComparer.OrdinalIgnoreCase)
             .Select(group => new SourceDocumentSliceRequest(
@@ -208,7 +218,6 @@ public partial class DecompilerPhase(
                 group.SelectMany(request => request.TypeDeclarationHandles).Distinct().ToList(),
                 group.All(request => request.IsGenerated)))
             .ToList();
-    }
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
     {
