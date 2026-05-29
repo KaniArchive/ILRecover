@@ -219,11 +219,27 @@ public partial class DecompilerPhase
 
             astBuilder.NameLookupMode = type.GetNameLookupMode();
 
-            var replacement = type.Parent is ICSharpCode.Decompiler.CSharp.Syntax.Attribute
-                ? astBuilder.ConvertAttributeType(typeResolveResult.Type)
-                : astBuilder.ConvertType(typeResolveResult.Type);
+            var previousAlwaysUseShortTypeNames = astBuilder.AlwaysUseShortTypeNames;
+            if (IsNestedType(typeResolveResult.Type))
+                astBuilder.AlwaysUseShortTypeNames = false;
+
+            AstType replacement;
+            try
+            {
+                replacement = type.Parent is ICSharpCode.Decompiler.CSharp.Syntax.Attribute
+                    ? astBuilder.ConvertAttributeType(typeResolveResult.Type)
+                    : astBuilder.ConvertType(typeResolveResult.Type);
+            }
+            finally
+            {
+                astBuilder.AlwaysUseShortTypeNames = previousAlwaysUseShortTypeNames;
+            }
 
             type.ReplaceWith(replacement);
         }
+
+        private static bool IsNestedType(IType type) =>
+            type.DeclaringType is not null
+            || type.GetDefinition()?.DeclaringTypeDefinition is not null;
     }
 }
