@@ -32,6 +32,8 @@ public partial class DecompilerPhase(
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndexByArity;
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
+    private readonly Dictionary<string, IReadOnlyDictionary<string, SyntaxTree>> _documentSliceCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<SourceDocumentSliceRequest>> _sliceRequestCache = new(StringComparer.Ordinal);
 
     public void Run()
     {
@@ -172,12 +174,11 @@ public partial class DecompilerPhase(
     {
         try
         {
-            return decompiler.DecompileTypeToSourceDocumentSlices(
-                    new FullTypeName(typeName),
-                    BuildSourceDocumentSliceRequests(typeName))
-                .FirstOrDefault(slice =>
-                    slice.DocumentUrl.Equals(file.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
-                ?.SyntaxTree;
+            var normalizedPath = file.RelativePath.Replace('\\', '/');
+            if (!GetDocumentSlices(decompiler, typeName).TryGetValue(normalizedPath, out var tree))
+                return null;
+
+            return (SyntaxTree)tree.Clone();
         }
         catch
         {
@@ -191,8 +192,30 @@ public partial class DecompilerPhase(
         return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
-    private List<SourceDocumentSliceRequest> BuildSourceDocumentSliceRequests(string rootTypeName) =>
-        mapped
+    private IReadOnlyDictionary<string, SyntaxTree> GetDocumentSlices(CSharpDecompiler decompiler, string rootTypeName)
+    {
+        if (_documentSliceCache.TryGetValue(rootTypeName, out var cached))
+            return cached;
+
+        var slices = decompiler.DecompileTypeToSourceDocumentSlices(
+                new FullTypeName(rootTypeName),
+                BuildSourceDocumentSliceRequests(rootTypeName))
+            .GroupBy(slice => slice.DocumentUrl, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First().SyntaxTree,
+                StringComparer.OrdinalIgnoreCase);
+
+        _documentSliceCache[rootTypeName] = slices;
+        return slices;
+    }
+
+    private List<SourceDocumentSliceRequest> BuildSourceDocumentSliceRequests(string rootTypeName)
+    {
+        if (_sliceRequestCache.TryGetValue(rootTypeName, out var cached))
+            return cached;
+
+        var requests = mapped
             .AsValueEnumerable()
             .Where(file => file.TypeFullNames.Any(typeName =>
                 string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
@@ -218,6 +241,10 @@ public partial class DecompilerPhase(
                 group.SelectMany(request => request.TypeDeclarationHandles).Distinct().ToList(),
                 group.All(request => request.IsGenerated)))
             .ToList();
+
+        _sliceRequestCache[rootTypeName] = requests;
+        return requests;
+    }
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
     {
