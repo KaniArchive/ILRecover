@@ -59,7 +59,7 @@ public class CsprojBuilder(
         sb.AppendLine($"    <AssemblyName>{projectName}</AssemblyName>");
         sb.AppendLine($"    <Nullable>{(nullable ? "enable" : "disable")}</Nullable>");
         sb.AppendLine($"    <LangVersion>{csVersion}</LangVersion>");
-        sb.AppendLine("    <ImplicitUsings>enable</ImplicitUsings>");
+        sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
         sb.AppendLine("  </PropertyGroup>");
 
         if (projRefs.Count > 0)
