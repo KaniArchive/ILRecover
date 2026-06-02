@@ -44,17 +44,27 @@ public partial class DecompilerPhase
 
     private void ResolveFileLocalUsings(SyntaxTree tree, CSharpDecompiler decompiler)
     {
+        var originalImportedNamespaces = CollectExistingUsingNamespaces(tree);
         RemoveExistingUsingDeclarations(tree);
 
         var currentTypeDefinition = FindPrimaryTypeDefinition(tree);
         if (currentTypeDefinition is null)
             return;
 
-        var importedNamespaces = CollectImportedNamespaces(tree, currentTypeDefinition.Namespace);
+        var importedNamespaces = originalImportedNamespaces
+            .Union(CollectImportedNamespaces(tree, currentTypeDefinition.Namespace))
+            .ToImmutableHashSet(StringComparer.Ordinal);
         AddUsingDeclarations(tree, importedNamespaces);
         FullyQualifyAmbiguousTypeReferences(tree, decompiler, currentTypeDefinition, importedNamespaces);
         RemoveUnusedUsingDeclarations(tree);
     }
+
+    private static IImmutableSet<string> CollectExistingUsingNamespaces(SyntaxTree tree) =>
+        tree.Children
+            .OfType<UsingDeclaration>()
+            .Select(usingDeclaration => usingDeclaration.Namespace)
+            .Where(namespaceName => !string.IsNullOrWhiteSpace(namespaceName))
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
     private static void RemoveExistingUsingDeclarations(SyntaxTree tree)
     {
@@ -152,6 +162,14 @@ public partial class DecompilerPhase
                     usedNamespaces.Add(namespaceResolveResult.Namespace.FullName);
                     break;
             }
+
+        foreach (var invocation in tree.Descendants.OfType<InvocationExpression>())
+            if (invocation.GetResolveResult() is CSharpInvocationResolveResult
+                {
+                    IsExtensionMethodInvocation: true,
+                    Member.DeclaringType: { } declaringType
+                } && !string.IsNullOrWhiteSpace(declaringType.Namespace))
+                usedNamespaces.Add(declaringType.Namespace);
 
         foreach (var usingDeclaration in tree.Children.OfType<UsingDeclaration>().ToList())
             if (!usedNamespaces.Contains(usingDeclaration.Namespace))
