@@ -37,7 +37,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             .GroupBy(s => NormalizePath(s.OriginalPath))
             .ToDictionary(g => g.Key, g => g.First());
 
-        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(pdbPath, typeNames, sourceByNormalizedPath);
+        var typeDocuments = BuildTypeDocumentMap(docToMethods);
+        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
 
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();
@@ -171,7 +172,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     private static Dictionary<string, List<SourceFileTypeDeclarationEntry>> BuildTypeDeclarationDocumentMap(
         string pdbPath,
         IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
-        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath,
+        IReadOnlyDictionary<string, HashSet<string>> typeDocuments)
     {
         var result = new Dictionary<string, List<SourceFileTypeDeclarationEntry>>(StringComparer.OrdinalIgnoreCase);
 
@@ -193,22 +195,54 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             if (!typeNames.TryGetValue(typeHandle, out var typeName) || IsCompilerGenerated(typeName))
                 continue;
 
-            var ownerDocument = ReadTypeDefinitionDocuments(pdbReader, customDebugInfo.Value)
+            var ownerDocuments = ReadTypeDefinitionDocuments(pdbReader, customDebugInfo.Value)
                 .Where(sourceByNormalizedPath.ContainsKey)
                 .OrderBy(document => sourceByNormalizedPath[document].IsGenerated)
                 .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
-                .FirstOrDefault();
+                .ToList();
 
-            if (string.IsNullOrWhiteSpace(ownerDocument))
-                continue;
-
-            if (!result.TryGetValue(ownerDocument, out var declarations))
+            if (IsNestedType(typeName) && typeDocuments.TryGetValue(typeName, out var exactTypeDocuments))
             {
-                declarations = [];
-                result[ownerDocument] = declarations;
+                ownerDocuments = ownerDocuments
+                    .Where(exactTypeDocuments.Contains)
+                    .ToList();
             }
 
-            declarations.Add(new SourceFileTypeDeclarationEntry(typeName, typeHandle));
+            if (ownerDocuments.Count == 0)
+                continue;
+
+            foreach (var ownerDocument in ownerDocuments)
+            {
+                if (!result.TryGetValue(ownerDocument, out var declarations))
+                {
+                    declarations = [];
+                    result[ownerDocument] = declarations;
+                }
+
+                declarations.Add(new SourceFileTypeDeclarationEntry(typeName, typeHandle));
+            }
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildTypeDocumentMap(
+        IReadOnlyDictionary<string, List<SourceFileMethodEntry>> docToMethods)
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        foreach (var pair in docToMethods)
+        {
+            foreach (var method in pair.Value)
+            {
+                if (!result.TryGetValue(method.TypeFullName, out var documents))
+                {
+                    documents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    result[method.TypeFullName] = documents;
+                }
+
+                documents.Add(pair.Key);
+            }
         }
 
         return result;
@@ -405,6 +439,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     }
 
     private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
+
+    private static bool IsNestedType(string typeName) => typeName.Contains('+', StringComparison.Ordinal);
 
     private static string NormalizePath(string path) => path.Replace('\\', '/').ToLowerInvariant();
 }

@@ -34,12 +34,14 @@ public partial class DecompilerPhase(
     private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
     private readonly Dictionary<string, IReadOnlyDictionary<string, SyntaxTree>> _documentSliceCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<SourceDocumentSliceRequest>> _sliceRequestCache = new(StringComparer.Ordinal);
+    private IReadOnlyList<SourceFileMap>? _sliceSourceFiles;
 
     public void Run()
     {
         using var debugInfoProvider = BuildDebugInfoProvider();
         var decompiler = BuildDecompiler(debugInfoProvider);
         var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
+        _sliceSourceFiles = userFiles;
 
         var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -74,12 +76,11 @@ public partial class DecompilerPhase(
     {
         var generatedCompanionsByType = sourceFiles
             .AsValueEnumerable()
-            .Where(file =>
-                file.IsGenerated && file.OriginalPath.Contains("/Generated/", StringComparison.OrdinalIgnoreCase))
+            .Where(file => file.IsGenerated)
             .SelectMany(file => file.TypeFullNames
                 .AsValueEnumerable()
                 .Distinct(StringComparer.Ordinal)
-                .Select(typeFullName => (typeFullName, file)))
+                .Select(typeFullName => (typeFullName: GetRootTypeName(typeFullName), file)))
             .GroupBy(pair => pair.typeFullName, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -93,7 +94,7 @@ public partial class DecompilerPhase(
             var methods = file.Methods.ToList();
             var typeDeclarations = (file.TypeDeclarations ?? []).ToList();
 
-            foreach (var typeFullName in file.TypeFullNames)
+            foreach (var typeFullName in file.TypeFullNames.Select(GetRootTypeName).Distinct(StringComparer.Ordinal))
             {
                 if (!generatedCompanionsByType.TryGetValue(typeFullName, out var companions))
                     continue;
@@ -215,7 +216,7 @@ public partial class DecompilerPhase(
         if (_sliceRequestCache.TryGetValue(rootTypeName, out var cached))
             return cached;
 
-        var requests = mapped
+        var requests = (_sliceSourceFiles ?? mapped)
             .AsValueEnumerable()
             .Where(file => file.TypeFullNames.Any(typeName =>
                 string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))

@@ -102,7 +102,7 @@ public partial class DecompilerPhase
                 currentTypeDefinition));
         var astBuilder = new TypeSystemAstBuilder(resolver)
         {
-            AlwaysUseShortTypeNames = true,
+            AlwaysUseShortTypeNames = false,
             AddResolveResultAnnotations = true,
             UseNullableSpecifierForValueTypes = true,
             UseAliases = true,
