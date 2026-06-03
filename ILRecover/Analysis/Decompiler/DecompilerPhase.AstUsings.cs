@@ -119,7 +119,7 @@ public partial class DecompilerPhase
             AlwaysUseGlobal = false
         };
 
-        tree.AcceptVisitor(new FileLocalTypeQualificationVisitor(astBuilder));
+        tree.AcceptVisitor(new FileLocalTypeQualificationVisitor(astBuilder, resolver, currentTypeDefinition.Namespace));
     }
 
     private UsingScope CreateUsingScope(CSharpDecompiler decompiler, string currentNamespace,
@@ -131,14 +131,27 @@ public partial class DecompilerPhase
             .Cast<INamespace>()
             .ToImmutableArray();
 
-        var currentNamespaceValue = string.IsNullOrWhiteSpace(currentNamespace)
-            ? decompiler.TypeSystem.RootNamespace
-            : decompiler.TypeSystem.GetNamespaceByFullName(currentNamespace) ?? decompiler.TypeSystem.RootNamespace;
-
-        return new UsingScope(
+        var usingScope = new UsingScope(
             new CSharpTypeResolveContext(decompiler.TypeSystem.MainModule),
-            currentNamespaceValue,
+            decompiler.TypeSystem.RootNamespace,
             resolvedNamespaces);
+
+        if (string.IsNullOrWhiteSpace(currentNamespace))
+            return usingScope;
+
+        return currentNamespace
+            .Split('.')
+            .Aggregate(usingScope, CreateNestedUsingScope);
+    }
+
+    private static UsingScope CreateNestedUsingScope(UsingScope parentScope, string namespacePart)
+    {
+        var namespaceValue = parentScope.Namespace.GetChildNamespace(namespacePart)
+            ?? new DummyNamespace(parentScope.Namespace, namespacePart);
+        return new UsingScope(
+            new CSharpTypeResolveContext(parentScope.Namespace.Compilation.MainModule, parentScope),
+            namespaceValue,
+            []);
     }
 
     private static ITypeDefinition? FindPrimaryTypeDefinition(SyntaxTree tree) =>
@@ -221,7 +234,37 @@ public partial class DecompilerPhase
         }
     }
 
-    private sealed class FileLocalTypeQualificationVisitor(TypeSystemAstBuilder astBuilder) : DepthFirstAstVisitor
+    private sealed class DummyNamespace(INamespace parentNamespace, string name) : INamespace
+    {
+        string INamespace.ExternAlias => string.Empty;
+
+        string INamespace.FullName => NamespaceDeclaration.BuildQualifiedName(parentNamespace.FullName, name);
+
+        public string Name => name;
+
+        ICSharpCode.Decompiler.TypeSystem.SymbolKind ICSharpCode.Decompiler.TypeSystem.ISymbol.SymbolKind =>
+            ICSharpCode.Decompiler.TypeSystem.SymbolKind.Namespace;
+
+        INamespace INamespace.ParentNamespace => parentNamespace;
+
+        IEnumerable<INamespace> INamespace.ChildNamespaces => [];
+
+        IEnumerable<ITypeDefinition> INamespace.Types => [];
+
+        IEnumerable<IModule> INamespace.ContributingModules => [];
+
+        ICompilation ICompilationProvider.Compilation => parentNamespace.Compilation;
+
+        INamespace? INamespace.GetChildNamespace(string name) => null;
+
+        ITypeDefinition? INamespace.GetTypeDefinition(string name, int typeParameterCount) => null;
+    }
+
+    private sealed class FileLocalTypeQualificationVisitor(
+            TypeSystemAstBuilder astBuilder,
+            CSharpResolver resolver,
+            string currentNamespace)
+        : DepthFirstAstVisitor
     {
         public override void VisitSimpleType(SimpleType simpleType)
         {
@@ -257,7 +300,7 @@ public partial class DecompilerPhase
             {
                 replacement = type.Parent is Attribute
                     ? astBuilder.ConvertAttributeType(typeResolveResult.Type)
-                    : astBuilder.ConvertType(typeResolveResult.Type);
+                    : ConvertType(typeResolveResult.Type);
             }
             finally
             {
@@ -270,6 +313,120 @@ public partial class DecompilerPhase
         private static bool IsNestedType(IType type) =>
             type.DeclaringType is not null
             || type.GetDefinition()?.DeclaringTypeDefinition is not null;
+
+        private AstType ConvertType(IType type)
+        {
+            var convertedType = astBuilder.ConvertType(type);
+            if (!IsFullyQualifiedMemberType(convertedType))
+                return convertedType;
+            if (IsNestedType(type))
+                return convertedType;
+
+            return TryCreateShorterType(type) ?? convertedType;
+        }
+
+        private AstType? TryCreateShorterType(IType type)
+        {
+            foreach (var candidate in GetTypeNameCandidates(type))
+            {
+                if (!ResolvesToType(candidate, type))
+                    continue;
+
+                var candidateType = BuildType(candidate, type.TypeArguments);
+                candidateType.AddAnnotation(new TypeResolveResult(type));
+                return candidateType;
+            }
+
+            return null;
+        }
+
+        private IEnumerable<string[]> GetTypeNameCandidates(IType type)
+        {
+            if (string.IsNullOrWhiteSpace(type.Namespace))
+                yield break;
+
+            var fullNameParts = type.Namespace.Split('.').Append(type.Name).ToArray();
+            var currentNamespaceParts = string.IsNullOrWhiteSpace(currentNamespace)
+                ? []
+                : currentNamespace.Split('.');
+            var commonPrefixLength = fullNameParts
+                .Take(fullNameParts.Length - 1)
+                .Zip(currentNamespaceParts)
+                .TakeWhile(pair => string.Equals(pair.First, pair.Second, StringComparison.Ordinal))
+                .Count();
+
+            for (var i = Math.Max(commonPrefixLength, 0); i < fullNameParts.Length - 1; i++)
+                yield return fullNameParts[i..];
+        }
+
+        private bool ResolvesToType(string[] nameParts, IType expectedType)
+        {
+            if (nameParts.Length == 0)
+                return false;
+
+            var currentResult = ResolveCandidateRoot(nameParts[0], expectedType);
+            if (currentResult is null)
+                return false;
+
+            for (var i = 1; i < nameParts.Length; i++)
+            {
+                currentResult = ResolveCandidateMember(
+                    currentResult,
+                    nameParts[i],
+                    i == nameParts.Length - 1 ? expectedType : null);
+                if (currentResult is null)
+                    return false;
+            }
+
+            return currentResult is TypeResolveResult typeResolveResult
+                && TypeMatches(typeResolveResult.Type, expectedType);
+        }
+
+        private ResolveResult? ResolveCandidateRoot(string identifier, IType expectedType)
+        {
+            var result = resolver.LookupSimpleNameOrTypeName(
+                identifier,
+                identifier == expectedType.Name ? GetLocalTypeArguments(expectedType) : [],
+                astBuilder.NameLookupMode);
+            return result.IsError ? null : result;
+        }
+
+        private ResolveResult? ResolveCandidateMember(ResolveResult target, string identifier, IType? expectedType)
+        {
+            var result = resolver.ResolveMemberAccess(
+                target,
+                identifier,
+                expectedType is not null && identifier == expectedType.Name ? GetLocalTypeArguments(expectedType) : [],
+                astBuilder.NameLookupMode);
+            return result.IsError ? null : result;
+        }
+
+        private static IReadOnlyList<IType> GetLocalTypeArguments(IType type)
+        {
+            var outerTypeParameterCount = type.DeclaringType?.TypeParameterCount ?? 0;
+            return type.TypeArguments.Skip(outerTypeParameterCount).ToArray();
+        }
+
+        private static bool TypeMatches(IType resolvedType, IType expectedType) =>
+            resolvedType.GetDefinition() is { } resolvedDefinition
+            && expectedType.GetDefinition() is { } expectedDefinition
+            && string.Equals(resolvedDefinition.FullName, expectedDefinition.FullName, StringComparison.Ordinal)
+            && resolvedType.TypeParameterCount == expectedType.TypeParameterCount;
+
+        private AstType BuildType(string[] nameParts, IReadOnlyList<IType> typeArguments)
+        {
+            AstType result = new SimpleType(nameParts[0]);
+            for (var i = 1; i < nameParts.Length; i++)
+                result = new MemberType(result, nameParts[i]);
+
+            foreach (var typeArgument in typeArguments)
+                result.AddChild(astBuilder.ConvertType(typeArgument), Roles.TypeArgument);
+
+            return result;
+        }
+
+        private static bool IsFullyQualifiedMemberType(AstType type) =>
+            type is MemberType { Target: MemberType or SimpleType };
 
         private static NameLookupMode GetNameLookupMode(AstType type)
         {
