@@ -246,7 +246,7 @@ public partial class DecompilerPhase
             if (type.GetResolveResult() is not TypeResolveResult typeResolveResult)
                 return;
 
-            astBuilder.NameLookupMode = type.GetNameLookupMode();
+            astBuilder.NameLookupMode = GetNameLookupMode(type);
 
             var previousAlwaysUseShortTypeNames = astBuilder.AlwaysUseShortTypeNames;
             if (IsNestedType(typeResolveResult.Type))
@@ -270,5 +270,20 @@ public partial class DecompilerPhase
         private static bool IsNestedType(IType type) =>
             type.DeclaringType is not null
             || type.GetDefinition()?.DeclaringTypeDefinition is not null;
+
+        private static NameLookupMode GetNameLookupMode(AstType type)
+        {
+            var lookupMode = type.GetNameLookupMode();
+            if (lookupMode != NameLookupMode.Type)
+                return lookupMode;
+
+            var outermostType = type;
+            while (outermostType.Parent is AstType parentType)
+                outermostType = parentType;
+
+            return outermostType.Parent is TypeReferenceExpression
+                ? NameLookupMode.Expression
+                : lookupMode;
+        }
     }
 }
