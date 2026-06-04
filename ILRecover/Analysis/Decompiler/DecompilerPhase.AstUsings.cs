@@ -320,7 +320,7 @@ public partial class DecompilerPhase
             {
                 replacement = type.Parent is Attribute
                     ? astBuilder.ConvertAttributeType(typeResolveResult.Type)
-                    : ConvertType(typeResolveResult.Type);
+                    : ConvertType(type, typeResolveResult.Type);
             }
             finally
             {
@@ -334,15 +334,50 @@ public partial class DecompilerPhase
             type.DeclaringType is not null
             || type.GetDefinition()?.DeclaringTypeDefinition is not null;
 
-        private AstType ConvertType(IType type)
+        private AstType ConvertType(AstType originalType, IType type)
         {
             var convertedType = astBuilder.ConvertType(type);
+            if (IsShadowedExpressionTypeReference(originalType, convertedType, type))
+                return TryCreateShorterType(type) ?? convertedType;
             if (!IsFullyQualifiedMemberType(convertedType))
                 return convertedType;
             if (IsNestedType(type))
                 return convertedType;
 
             return TryCreateShorterType(type) ?? convertedType;
+        }
+
+        private bool IsShadowedExpressionTypeReference(AstType originalType, AstType convertedType, IType type)
+        {
+            return IsBareTypeReferenceExpression(originalType, convertedType, type)
+                   && HasEnclosingNonTypeMemberNamed(originalType, type.Name)
+                   && TryCreateShorterType(type) is not null;
+        }
+
+        private static bool IsBareTypeReferenceExpression(AstType originalType, AstType convertedType, IType type)
+        {
+            if (convertedType is not SimpleType simpleType
+                || !string.Equals(simpleType.Identifier, type.Name, StringComparison.Ordinal))
+                return false;
+
+            var outermostType = originalType;
+            while (outermostType.Parent is AstType parentType)
+                outermostType = parentType;
+
+            return outermostType.Parent is TypeReferenceExpression;
+        }
+
+        private static bool HasEnclosingNonTypeMemberNamed(AstNode node, string name)
+        {
+            for (var current = node.Parent; current is not null; current = current.Parent)
+            {
+                if (current is TypeDeclaration typeDeclaration
+                    && typeDeclaration.Members.Any(member => member is not TypeDeclaration
+                                                             && string.Equals(member.Name, name, StringComparison.Ordinal)))
+                    return true;
+            }
+
+            return false;
         }
 
         private AstType? TryCreateShorterType(IType type)
