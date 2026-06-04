@@ -338,13 +338,36 @@ public partial class DecompilerPhase
         {
             var convertedType = astBuilder.ConvertType(type);
             if (IsShadowedExpressionTypeReference(originalType, convertedType, type))
-                return TryCreateShorterType(type) ?? convertedType;
+                return PreserveNamedTupleElementNames(originalType, TryCreateShorterType(type) ?? convertedType);
             if (!IsFullyQualifiedMemberType(convertedType))
-                return convertedType;
+                return PreserveNamedTupleElementNames(originalType, convertedType);
             if (IsNestedType(type))
-                return convertedType;
+                return PreserveNamedTupleElementNames(originalType, convertedType);
 
-            return TryCreateShorterType(type) ?? convertedType;
+            return PreserveNamedTupleElementNames(originalType, TryCreateShorterType(type) ?? convertedType);
+        }
+
+        private static AstType PreserveNamedTupleElementNames(AstType originalType, AstType convertedType)
+        {
+            PreserveNamedTupleElementNamesRecursive(originalType, convertedType);
+            return convertedType;
+        }
+
+        private static void PreserveNamedTupleElementNamesRecursive(AstType originalType, AstType convertedType)
+        {
+            if (originalType is TupleAstType originalTuple && convertedType is TupleAstType convertedTuple)
+            {
+                var originalElements = originalTuple.Elements.ToArray();
+                var convertedElements = convertedTuple.Elements.ToArray();
+                for (var i = 0; i < originalElements.Length && i < convertedElements.Length; i++)
+                    if (!string.IsNullOrWhiteSpace(originalElements[i].Name))
+                        convertedElements[i].Name = originalElements[i].Name;
+            }
+
+            var originalTypeArguments = originalType.GetChildrenByRole(Roles.TypeArgument).ToArray();
+            var convertedTypeArguments = convertedType.GetChildrenByRole(Roles.TypeArgument).ToArray();
+            for (var i = 0; i < originalTypeArguments.Length && i < convertedTypeArguments.Length; i++)
+                PreserveNamedTupleElementNamesRecursive(originalTypeArguments[i], convertedTypeArguments[i]);
         }
 
         private bool IsShadowedExpressionTypeReference(AstType originalType, AstType convertedType, IType type)
