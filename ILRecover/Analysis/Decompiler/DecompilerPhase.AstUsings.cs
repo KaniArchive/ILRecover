@@ -184,6 +184,9 @@ public partial class DecompilerPhase
                 } && !string.IsNullOrWhiteSpace(declaringType.Namespace))
                 usedNamespaces.Add(declaringType.Namespace);
 
+        foreach (var queryExpression in tree.Descendants.OfType<QueryExpression>())
+            AddExtensionMethodNamespace(usedNamespaces, queryExpression.GetResolveResult());
+
         foreach (var usingDeclaration in tree.Children.OfType<UsingDeclaration>().ToList())
             if (!usedNamespaces.Contains(usingDeclaration.Namespace))
                 usingDeclaration.Remove();
@@ -218,6 +221,13 @@ public partial class DecompilerPhase
             base.VisitMemberType(memberType);
         }
 
+        public override void VisitQueryExpression(QueryExpression queryExpression)
+        {
+            AddExtensionMethodNamespace(ImportedNamespaces, queryExpression.GetResolveResult());
+
+            base.VisitQueryExpression(queryExpression);
+        }
+
         private void AddImportedNamespace(ResolveResult resolveResult)
         {
             var namespaceName = resolveResult switch
@@ -232,6 +242,16 @@ public partial class DecompilerPhase
 
             ImportedNamespaces.Add(namespaceName);
         }
+    }
+
+    private static void AddExtensionMethodNamespace(HashSet<string> namespaces, ResolveResult resolveResult)
+    {
+        if (resolveResult is CSharpInvocationResolveResult
+            {
+                IsExtensionMethodInvocation: true,
+                Member.DeclaringType.Namespace: { } namespaceName
+            } && !string.IsNullOrWhiteSpace(namespaceName))
+            namespaces.Add(namespaceName);
     }
 
     private sealed class DummyNamespace(INamespace parentNamespace, string name) : INamespace
