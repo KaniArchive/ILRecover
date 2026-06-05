@@ -1,6 +1,6 @@
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ILRecover.Analysis;
-using ILRecover.Analysis.Csproj;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
 using ILRecover.Models;
@@ -40,16 +40,15 @@ public static class Parser
             Log.Info($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
 
             Log.Info("Writing csproj...");
-            var builder = new CsprojBuilder(
+            var builder = new RecoveredProjectFileBuilder(
                 target.DllPath,
                 outputDir,
                 target.Name,
-                target.Sdk,
-                input,
                 target.ProjectRefs,
                 csVersionStr,
                 dependencyDirs);
-            builder.Build();
+            var projectPath = builder.Build();
+            Log.Info($"Wrote: {projectPath}");
 
             Log.Info("Decompiling...");
             var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dependencyDirs,
@@ -99,24 +98,11 @@ public static class Parser
                 t.DllPath,
                 t.PdbPath,
                 t.Name,
-                InferSdk(t.DllPath),
                 BuildProjectRefs(t.DllPath, t.Name, projectNames)))
             .ToList();
     }
 
-    private static string InferSdk(string dllPath)
-    {
-        var file = new PEFile(dllPath);
-        var assemblyReferences = file.Metadata.AssemblyReferences
-            .Select(handle => file.Metadata.GetString(file.Metadata.GetAssemblyReference(handle).Name));
-
-        return assemblyReferences.Any(name =>
-            name.StartsWith("Microsoft.AspNetCore", StringComparison.OrdinalIgnoreCase))
-            ? "Microsoft.NET.Sdk.Web"
-            : "Microsoft.NET.Sdk";
-    }
-
-    private static List<ProjectRefEntry> BuildProjectRefs(
+    private static List<ProjectReferenceInfo> BuildProjectRefs(
         string dllPath,
         string projectName,
         IReadOnlySet<string> projectNames)
@@ -130,7 +116,7 @@ public static class Parser
             .Where(name => !string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Select(name => new ProjectRefEntry(name, Path.Combine("..", name, $"{name}.csproj")))
+            .Select(name => new ProjectReferenceInfo(name, Path.Combine("..", name, $"{name}.csproj")))
             .ToList();
     }
 
@@ -138,6 +124,5 @@ public static class Parser
         string DllPath,
         string PdbPath,
         string Name,
-        string Sdk,
-        List<ProjectRefEntry> ProjectRefs);
+        List<ProjectReferenceInfo> ProjectRefs);
 }
