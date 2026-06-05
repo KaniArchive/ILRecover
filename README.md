@@ -13,8 +13,11 @@ Why do this why not just directly `ICSharpCode.Decompiler`?
 # Show help
 ILRecover.exe --help
 
-ILRecover.exe -i "DLL_Folder" -o "Ouput_Folder" -ec ".editorconfig" -cv 14 -dp "Dependencies_Folder"
+ILRecover.exe -i "DLL_Folder" -o "Ouput_Folder" -ec ".editorconfig" -cs 14 -dp "Dependencies_Folder"
+ILRecover.exe -i "..\_no\Source" -o "..\_no\cs10" -cs 10 -sl "cs10" -dp "..\_no\Dependencies"
 ```
+
+When the input folder contains multiple `*.dll` files with matching `*.pdb` files, ILRecover writes one project folder per assembly and creates a `.slnx` file in the output folder. If `-sl` is omitted, the solution name defaults to the output folder name.
 
 ## Build
 

@@ -15,12 +15,14 @@ public static class Parser
         string output,
         int csVersion,
         string[]? dependencies,
-        string? editorConfig)
+        string? editorConfig,
+        string? solution)
     {
         var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
         IReadOnlyList<string> dependencyDirs = dependencies ?? [];
 
         var targets = ValidateAndResolveTargets(input);
+        var projectPaths = new List<string>();
 
         foreach (var target in targets)
         {
@@ -48,6 +50,7 @@ public static class Parser
                 csVersionStr,
                 dependencyDirs);
             var projectPath = builder.Build();
+            projectPaths.Add(projectPath);
             Log.Info($"Wrote: {projectPath}");
 
             Log.Info("Decompiling...");
@@ -57,6 +60,10 @@ public static class Parser
 
             Log.Info($"Done: {outputDir}");
         }
+
+        Log.Info("Writing solution...");
+        var solutionPath = new RecoveredSolutionFileBuilder(output, solution, projectPaths).Build();
+        Log.Info($"Wrote: {solutionPath}");
 
         Log.Info("All Done!");
     }
