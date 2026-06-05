@@ -13,7 +13,7 @@ Why do this why not just directly `ICSharpCode.Decompiler`?
 # Show help
 ILRecover.exe --help
 
-ILRecover.exe -i "DLL_Folder" -o "Ouput_Folder" -ec ".editorconfig" -cs 14 -dn "net10.0" -dp "Dependencies_Folder"
+ILRecover.exe -i "DLL_Folder" -o "Output_Folder" -cs 14 -dn "net10.0" -dp "Dependencies_Folder"
 ```
 
 ## Build

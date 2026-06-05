@@ -21,13 +21,9 @@ public partial class DecompilerPhase(
     string? csVersion = null,
     string? dotnetVersion = null,
     IReadOnlyList<string>? dependencySearchDirs = null,
-    string? editorConfigPath = null,
     string? pdbPath = null)
 {
     private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
-
-    private readonly string? _editorConfigPath =
-        string.IsNullOrWhiteSpace(editorConfigPath) ? null : Path.GetFullPath(editorConfigPath);
 
     private IReadOnlyList<MetadataReference>? _formattingReferences;
     private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;

@@ -15,7 +15,6 @@ public static class Parser
         string output,
         int csVersion,
         string[]? dependencies,
-        string? editorConfig,
         string? solution,
         string? dotnet)
     {
@@ -57,7 +56,7 @@ public static class Parser
 
             Log.Info("Decompiling...");
             var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dotnet, dependencyDirs,
-                editorConfig, target.PdbPath);
+                target.PdbPath);
             phase.Run();
 
             Log.Info($"Done: {outputDir}");
