@@ -19,6 +19,7 @@ public partial class DecompilerPhase(
     IReadOnlyList<SourceFileMap> mapped,
     string outputDir,
     string? csVersion = null,
+    string? dotnetVersion = null,
     IReadOnlyList<string>? dependencySearchDirs = null,
     string? editorConfigPath = null,
     string? pdbPath = null)
@@ -273,13 +274,28 @@ public partial class DecompilerPhase(
         };
 
         var file = new PEFile(dllPath);
-        var resolver = new UniversalAssemblyResolver(dllPath, false, file.DetectTargetFrameworkId());
+        var targetFrameworkId = GetTargetFrameworkId(file);
+        var resolver = new UniversalAssemblyResolver(dllPath, false, targetFrameworkId);
         AddResolverSearchDirectories(resolver);
 
         return new CSharpDecompiler(dllPath, resolver, settings)
         {
             DebugInfoProvider = debugInfoProvider
         };
+    }
+
+    private string GetTargetFrameworkId(PEFile file)
+    {
+        if (string.IsNullOrWhiteSpace(dotnetVersion))
+            return file.DetectTargetFrameworkId();
+
+        var normalized = dotnetVersion.Trim();
+        if (normalized.StartsWith("net", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized[3..];
+
+        return normalized.StartsWith(".NETCoreApp,Version=", StringComparison.OrdinalIgnoreCase)
+            ? normalized
+            : $".NETCoreApp,Version=v{normalized}";
     }
 
     private PortablePdbDebugInfoProvider? BuildDebugInfoProvider()
