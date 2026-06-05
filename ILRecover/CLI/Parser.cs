@@ -16,7 +16,8 @@ public static class Parser
         int csVersion,
         string[]? dependencies,
         string? editorConfig,
-        string? solution)
+        string? solution,
+        string? dotnet)
     {
         var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
         IReadOnlyList<string> dependencyDirs = dependencies ?? [];
@@ -48,6 +49,7 @@ public static class Parser
                 target.Name,
                 target.ProjectRefs,
                 csVersionStr,
+                dotnet,
                 dependencyDirs);
             var projectPath = builder.Build();
             projectPaths.Add(projectPath);
