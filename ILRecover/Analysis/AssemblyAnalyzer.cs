@@ -410,16 +410,23 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
     private static string? FindCommonSourceRoot(IEnumerable<string> paths)
     {
-        var directorySegments = paths
+        var directoryPaths = paths
             .AsValueEnumerable()
-            .Select(path => path.Replace('\\', '/'))
-            .Select(path => Path.GetDirectoryName(path)?.Replace('\\', '/') ?? string.Empty)
+            .Select(GetNormalizedDirectoryPath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path.Split('/', StringSplitOptions.RemoveEmptyEntries))
             .ToList();
 
-        if (directorySegments.Count == 0)
+        if (directoryPaths.Count == 0)
             return null;
+
+        var rootPrefix = GetRootPrefix(directoryPaths[0]);
+        if (directoryPaths.Any(path => !string.Equals(GetRootPrefix(path), rootPrefix, StringComparison.Ordinal)))
+            return null;
+
+        var directorySegments = directoryPaths
+            .AsValueEnumerable()
+            .Select(path => path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+            .ToList();
 
         var commonLength = directorySegments[0].Length;
 
@@ -435,7 +442,22 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 return null;
         }
 
-        return string.Join('/', directorySegments[0][..commonLength]) + "/";
+        return rootPrefix + string.Join('/', directorySegments[0][..commonLength]) + "/";
+    }
+
+    private static string GetNormalizedDirectoryPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        var fileNameIdx = normalized.LastIndexOf('/');
+        return fileNameIdx < 0 ? string.Empty : normalized[..fileNameIdx];
+    }
+
+    private static string GetRootPrefix(string path)
+    {
+        if (path.StartsWith("//", StringComparison.Ordinal))
+            return "//";
+
+        return path.StartsWith("/", StringComparison.Ordinal) ? "/" : string.Empty;
     }
 
     private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
