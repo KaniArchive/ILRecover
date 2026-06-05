@@ -1,5 +1,6 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using ILRecover.Analysis.SourceGen;
 using ILRecover.Models;
 using ZLinq;
 
@@ -68,8 +69,7 @@ public static class PdbReader
         return p.Contains("/obj/")
                || p.EndsWith(".g.cs")
                || p.EndsWith(".Generated.cs")
-               || p.Contains("MemoryPack.Generator")
-               || p.Contains("MessagePack.Generator")
+               || SourceGenPaths.IsKnownGeneratorPath(p)
                || p.EndsWith(".Designer.cs");
     }
 

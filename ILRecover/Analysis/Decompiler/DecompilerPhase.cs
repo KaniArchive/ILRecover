@@ -3,6 +3,7 @@ using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
+using ILRecover.Analysis.SourceGen;
 using ICSharpCode.Decompiler.TypeSystem;
 using ILRecover.Helpers;
 using ILRecover.Models;
@@ -76,7 +77,7 @@ public partial class DecompilerPhase(
     {
         var generatedCompanionsByType = sourceFiles
             .AsValueEnumerable()
-            .Where(file => file.IsGenerated)
+            .Where(file => file.IsGenerated && SourceGenNormalizer.ShouldMergeGeneratedCompanion(file))
             .SelectMany(file => file.TypeFullNames
                 .AsValueEnumerable()
                 .Distinct(StringComparer.Ordinal)
@@ -179,7 +180,9 @@ public partial class DecompilerPhase(
             if (!GetDocumentSlices(decompiler, typeName).TryGetValue(normalizedPath, out var tree))
                 return null;
 
-            return (SyntaxTree)tree.Clone();
+            var clone = (SyntaxTree)tree.Clone();
+            SourceGenNormalizer.Normalize(clone);
+            return clone;
         }
         catch
         {
