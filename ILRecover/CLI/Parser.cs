@@ -100,31 +100,48 @@ public static class Parser
             .Select(t => t.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var targetReferences = targets
+            .AsValueEnumerable()
+            .Select(t => (
+                t.Name,
+                References: ReadAssemblyReferenceNames(t.DllPath)
+                    .Where(name => !projectNames.Contains(name))
+                    .ToList()))
+            .ToDictionary(t => t.Name, t => t.References, StringComparer.OrdinalIgnoreCase);
+
         return targets
             .AsValueEnumerable()
             .Select(t => new TargetProject(
                 t.DllPath,
                 t.PdbPath,
                 t.Name,
-                BuildProjectRefs(t.DllPath, t.Name, projectNames)))
+                BuildProjectRefs(t.DllPath, t.Name, projectNames, targetReferences)))
             .ToList();
     }
 
     private static List<ProjectReferenceInfo> BuildProjectRefs(
         string dllPath,
         string projectName,
-        IReadOnlySet<string> projectNames)
+        IReadOnlySet<string> projectNames,
+        IReadOnlyDictionary<string, List<string>> targetReferences) =>
+        ReadAssemblyReferenceNames(dllPath)
+            .Where(projectNames.Contains)
+            .Where(name => !string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new ProjectReferenceInfo(
+                name,
+                Path.Combine("..", name, $"{name}.csproj"),
+                targetReferences.TryGetValue(name, out var dependencies) ? dependencies : []))
+            .ToList();
+
+    private static List<string> ReadAssemblyReferenceNames(string dllPath)
     {
         var file = new PEFile(dllPath);
 
         return file.Metadata.AssemblyReferences
             .AsValueEnumerable()
             .Select(handle => file.Metadata.GetString(file.Metadata.GetAssemblyReference(handle).Name))
-            .Where(projectNames.Contains)
-            .Where(name => !string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Select(name => new ProjectReferenceInfo(name, Path.Combine("..", name, $"{name}.csproj")))
             .ToList();
     }
 
