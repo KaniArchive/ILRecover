@@ -54,7 +54,14 @@ public static class Parser
             Log.Info($"Wrote: {projectPath}");
 
             Log.Info("Decompiling...");
-            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir);
+            var phase = new DecompilerPhase(
+                target.DllPath,
+                result.Mapped,
+                outputDir,
+                csVersionStr,
+                dotnet,
+                dependencyDirs,
+                target.PdbPath);
             phase.Run();
 
             Log.Info($"Done: {outputDir}");
