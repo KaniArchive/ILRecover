@@ -1,9 +1,8 @@
-using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
+using ICSharpCode.Decompiler.Metadata;
 using ILRecover.Analysis;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
-using ILRecover.Models;
 using ZLinq;
 
 namespace ILRecover.CLI;
@@ -55,8 +54,7 @@ public static class Parser
             Log.Info($"Wrote: {projectPath}");
 
             Log.Info("Decompiling...");
-            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir, csVersionStr, dotnet, dependencyDirs,
-                target.PdbPath);
+            var phase = new DecompilerPhase(target.DllPath, result.Mapped, outputDir);
             phase.Run();
 
             Log.Info($"Done: {outputDir}");

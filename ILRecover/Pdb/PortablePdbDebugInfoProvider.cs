@@ -7,14 +7,12 @@ namespace ILRecover.Pdb;
 
 public sealed class PortablePdbDebugInfoProvider : IDebugInfoProvider, IDisposable
 {
-    private readonly string _moduleFileName;
     private readonly MetadataReaderProvider _provider;
     private readonly FileStream _stream;
     private bool _hasError;
 
     public PortablePdbDebugInfoProvider(string moduleFileName, string pdbPath)
     {
-        _moduleFileName = moduleFileName;
         SourceFileName = pdbPath;
         _stream = File.OpenRead(pdbPath);
         _provider = MetadataReaderProvider.FromPortablePdbStream(_stream);

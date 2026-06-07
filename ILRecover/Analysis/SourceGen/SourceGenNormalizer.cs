@@ -5,15 +5,13 @@ namespace ILRecover.Analysis.SourceGen;
 
 internal static partial class SourceGenNormalizer
 {
-    public static bool ShouldMergeGeneratedCompanion(SourceFileMap file)
-    {
-        return ShouldMergeMemoryPackGeneratedCompanion(file)
-               && ShouldMergeMessagePackGeneratedCompanion(file);
-    }
+    public static bool ShouldMergeGeneratedCompanion(SourceFileMap file) =>
+        ShouldMergeMemoryPackGeneratedCompanion(file)
+        && ShouldMergeMessagePackGeneratedCompanion(file);
 
     public static void Normalize(SyntaxTree tree)
     {
         NormalizeMemoryPack(tree);
-        NormalizeMessagePack(tree);
+        NormalizeMessagePack();
     }
 }

@@ -3,8 +3,8 @@ using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
-using ILRecover.Analysis.SourceGen;
 using ICSharpCode.Decompiler.TypeSystem;
+using ILRecover.Analysis.SourceGen;
 using ILRecover.Helpers;
 using ILRecover.Models;
 using ILRecover.Pdb;
@@ -25,13 +25,13 @@ public partial class DecompilerPhase(
 {
     private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
 
+    private readonly Dictionary<string, IReadOnlyDictionary<string, SyntaxTree>> _documentSliceCache =
+        new(StringComparer.Ordinal);
+
+    private readonly Dictionary<string, List<SourceDocumentSliceRequest>> _sliceRequestCache =
+        new(StringComparer.Ordinal);
+
     private IReadOnlyList<MetadataReference>? _formattingReferences;
-    private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndex;
-    private Dictionary<string, HashSet<string>>? _preferredTypeNamespaceIndexByArity;
-    private Dictionary<string, HashSet<string>>? _typeNamespaceIndex;
-    private Dictionary<string, HashSet<string>>? _typeNamespaceIndexByArity;
-    private readonly Dictionary<string, IReadOnlyDictionary<string, SyntaxTree>> _documentSliceCache = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<SourceDocumentSliceRequest>> _sliceRequestCache = new(StringComparer.Ordinal);
     private IReadOnlyList<SourceFileMap>? _sliceSourceFiles;
 
     public void Run()
@@ -163,7 +163,7 @@ public partial class DecompilerPhase(
 
         ResolveFileLocalUsings(combinedTree, decompiler);
         var source = SyntaxTreeToString(combinedTree);
-        return PostProcessSource(file, source);
+        return PostProcessSource(source);
     }
 
     private SyntaxTree? SliceTypeForFile(
@@ -335,11 +335,4 @@ public partial class DecompilerPhase(
     }
 
     private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
-
-    private sealed record MethodDebugSignature(
-        string TypeFullName,
-        string MethodName,
-        int ParameterCount,
-        bool IsConstructor
-    );
 }

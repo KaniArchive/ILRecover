@@ -9,6 +9,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using ZLinq;
 using Attribute = ICSharpCode.Decompiler.CSharp.Syntax.Attribute;
+using ISymbol = ICSharpCode.Decompiler.TypeSystem.ISymbol;
+using SymbolKind = ICSharpCode.Decompiler.TypeSystem.SymbolKind;
 using SyntaxTree = ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree;
 
 namespace ILRecover.Analysis.Decompiler;
@@ -119,7 +121,8 @@ public partial class DecompilerPhase
             AlwaysUseGlobal = false
         };
 
-        tree.AcceptVisitor(new FileLocalTypeQualificationVisitor(astBuilder, resolver, currentTypeDefinition.Namespace));
+        tree.AcceptVisitor(
+            new FileLocalTypeQualificationVisitor(astBuilder, resolver, currentTypeDefinition.Namespace));
     }
 
     private UsingScope CreateUsingScope(CSharpDecompiler decompiler, string currentNamespace,
@@ -147,7 +150,7 @@ public partial class DecompilerPhase
     private static UsingScope CreateNestedUsingScope(UsingScope parentScope, string namespacePart)
     {
         var namespaceValue = parentScope.Namespace.GetChildNamespace(namespacePart)
-            ?? new DummyNamespace(parentScope.Namespace, namespacePart);
+                             ?? new DummyNamespace(parentScope.Namespace, namespacePart);
         return new UsingScope(
             new CSharpTypeResolveContext(parentScope.Namespace.Compilation.MainModule, parentScope),
             namespaceValue,
@@ -190,6 +193,16 @@ public partial class DecompilerPhase
         foreach (var usingDeclaration in tree.Children.OfType<UsingDeclaration>().ToList())
             if (!usedNamespaces.Contains(usingDeclaration.Namespace))
                 usingDeclaration.Remove();
+    }
+
+    private static void AddExtensionMethodNamespace(HashSet<string> namespaces, ResolveResult resolveResult)
+    {
+        if (resolveResult is CSharpInvocationResolveResult
+            {
+                IsExtensionMethodInvocation: true,
+                Member.DeclaringType.Namespace: { } namespaceName
+            } && !string.IsNullOrWhiteSpace(namespaceName))
+            namespaces.Add(namespaceName);
     }
 
     private sealed class FileLocalImportCollector(string currentNamespace) : DepthFirstAstVisitor
@@ -244,16 +257,6 @@ public partial class DecompilerPhase
         }
     }
 
-    private static void AddExtensionMethodNamespace(HashSet<string> namespaces, ResolveResult resolveResult)
-    {
-        if (resolveResult is CSharpInvocationResolveResult
-            {
-                IsExtensionMethodInvocation: true,
-                Member.DeclaringType.Namespace: { } namespaceName
-            } && !string.IsNullOrWhiteSpace(namespaceName))
-            namespaces.Add(namespaceName);
-    }
-
     private sealed class DummyNamespace(INamespace parentNamespace, string name) : INamespace
     {
         string INamespace.ExternAlias => string.Empty;
@@ -262,8 +265,8 @@ public partial class DecompilerPhase
 
         public string Name => name;
 
-        ICSharpCode.Decompiler.TypeSystem.SymbolKind ICSharpCode.Decompiler.TypeSystem.ISymbol.SymbolKind =>
-            ICSharpCode.Decompiler.TypeSystem.SymbolKind.Namespace;
+        SymbolKind ISymbol.SymbolKind =>
+            SymbolKind.Namespace;
 
         INamespace INamespace.ParentNamespace => parentNamespace;
 
@@ -281,9 +284,9 @@ public partial class DecompilerPhase
     }
 
     private sealed class FileLocalTypeQualificationVisitor(
-            TypeSystemAstBuilder astBuilder,
-            CSharpResolver resolver,
-            string currentNamespace)
+        TypeSystemAstBuilder astBuilder,
+        CSharpResolver resolver,
+        string currentNamespace)
         : DepthFirstAstVisitor
     {
         public override void VisitSimpleType(SimpleType simpleType)
@@ -370,12 +373,10 @@ public partial class DecompilerPhase
                 PreserveNamedTupleElementNamesRecursive(originalTypeArguments[i], convertedTypeArguments[i]);
         }
 
-        private bool IsShadowedExpressionTypeReference(AstType originalType, AstType convertedType, IType type)
-        {
-            return IsBareTypeReferenceExpression(originalType, convertedType, type)
-                   && HasEnclosingNonTypeMemberNamed(originalType, type.Name)
-                   && TryCreateShorterType(type) is not null;
-        }
+        private bool IsShadowedExpressionTypeReference(AstType originalType, AstType convertedType, IType type) =>
+            IsBareTypeReferenceExpression(originalType, convertedType, type)
+            && HasEnclosingNonTypeMemberNamed(originalType, type.Name)
+            && TryCreateShorterType(type) is not null;
 
         private static bool IsBareTypeReferenceExpression(AstType originalType, AstType convertedType, IType type)
         {
@@ -393,12 +394,11 @@ public partial class DecompilerPhase
         private static bool HasEnclosingNonTypeMemberNamed(AstNode node, string name)
         {
             for (var current = node.Parent; current is not null; current = current.Parent)
-            {
                 if (current is TypeDeclaration typeDeclaration
                     && typeDeclaration.Members.Any(member => member is not TypeDeclaration
-                                                             && string.Equals(member.Name, name, StringComparison.Ordinal)))
+                                                             && string.Equals(member.Name, name,
+                                                                 StringComparison.Ordinal)))
                     return true;
-            }
 
             return false;
         }
@@ -457,7 +457,7 @@ public partial class DecompilerPhase
             }
 
             return currentResult is TypeResolveResult typeResolveResult
-                && TypeMatches(typeResolveResult.Type, expectedType);
+                   && TypeMatches(typeResolveResult.Type, expectedType);
         }
 
         private ResolveResult? ResolveCandidateRoot(string identifier, IType expectedType)

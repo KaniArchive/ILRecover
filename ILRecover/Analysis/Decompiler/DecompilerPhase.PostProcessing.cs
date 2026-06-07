@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using ILRecover.Models;
 
 namespace ILRecover.Analysis.Decompiler;
 
@@ -8,7 +7,7 @@ public partial class DecompilerPhase
     private static string NormalizeTopLevelSpacing(string source) =>
         ModifierRegex().Replace(source, "}" + Environment.NewLine + Environment.NewLine);
 
-    private string PostProcessSource(SourceFileMap file, string source)
+    private string PostProcessSource(string source)
     {
         source = RemoveDecompilerNoiseAttributes(source);
         source = NormalizeGeneratedMainMethodName(source);

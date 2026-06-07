@@ -38,7 +38,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         RemoveNonPreferredNestedTypeMethods(docToMethods, sourceByNormalizedPath);
 
         var typeDocuments = BuildTypeDocumentMap(docToMethods);
-        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(mdReader, pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
+        var typeDeclarationsByDocument =
+            BuildTypeDeclarationDocumentMap(mdReader, pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
 
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();
@@ -121,9 +122,9 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                     if (entries.Any(entry => preferredDocuments.Contains(entry.Document)))
                     {
                         entries = entries
-                        .AsValueEnumerable()
-                        .Where(entry => preferredDocuments.Contains(entry.Document))
-                        .ToList();
+                            .AsValueEnumerable()
+                            .Where(entry => preferredDocuments.Contains(entry.Document))
+                            .ToList();
                     }
                     else if (preferredDocuments.Count == 1)
                     {
@@ -271,11 +272,9 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 .ToList();
 
             if (IsNestedType(typeName) && typeDocuments.TryGetValue(typeName, out var exactTypeDocuments))
-            {
                 ownerDocuments = ownerDocuments
                     .Where(exactTypeDocuments.Contains)
                     .ToList();
-            }
 
             if (IsNestedType(typeName))
                 ownerDocuments = PreferNestedTypeDocument(typeName,
@@ -336,9 +335,9 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                     if (entries.Any(entry => preferredDocuments.Contains(entry.Document)))
                     {
                         entries = entries
-                        .AsValueEnumerable()
-                        .Where(entry => preferredDocuments.Contains(entry.Document))
-                        .ToList();
+                            .AsValueEnumerable()
+                            .Where(entry => preferredDocuments.Contains(entry.Document))
+                            .ToList();
                     }
                     else if (preferredDocuments.Count == 1)
                     {
@@ -377,7 +376,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         {
             var preferredDocuments = documents
                 .AsValueEnumerable()
-                .Where(document => string.Equals(GetDocumentFileName(document), expectedFileName, StringComparison.OrdinalIgnoreCase))
+                .Where(document => string.Equals(GetDocumentFileName(document), expectedFileName,
+                    StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (preferredDocuments.Count > 0)
@@ -397,7 +397,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         {
             var declaringTypeDocuments = documents
                 .AsValueEnumerable()
-                .Where(document => string.Equals(GetDocumentFileName(document), declaringTypeFileName, StringComparison.OrdinalIgnoreCase))
+                .Where(document => string.Equals(GetDocumentFileName(document), declaringTypeFileName,
+                    StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (declaringTypeDocuments.Count > 0)
@@ -419,7 +420,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         if (documents.Count == 0)
             return documents;
 
-        var expectedFileNames = new[] { GetNestedTypeDocumentFileName(typeName), GetDeclaringTypeDocumentFileName(typeName) }
+        var expectedFileNames = new[]
+                { GetNestedTypeDocumentFileName(typeName), GetDeclaringTypeDocumentFileName(typeName) }
             .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -509,8 +511,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             return false;
 
         return nestedSimpleName.EndsWith(partialName, StringComparison.OrdinalIgnoreCase)
-            || partialName.EndsWith("s", StringComparison.OrdinalIgnoreCase)
-            && nestedSimpleName.EndsWith(partialName[..^1], StringComparison.OrdinalIgnoreCase);
+               || (partialName.EndsWith("s", StringComparison.OrdinalIgnoreCase)
+                   && nestedSimpleName.EndsWith(partialName[..^1], StringComparison.OrdinalIgnoreCase));
     }
 
     private static string GetDocumentFileName(string document)
@@ -562,7 +564,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
         var declarationDocumentsByType = declarationsByDocument
             .AsValueEnumerable()
-            .SelectMany(pair => pair.Value.AsValueEnumerable().Select(declaration => (pair.Key, declaration.TypeFullName)))
+            .SelectMany(pair =>
+                pair.Value.AsValueEnumerable().Select(declaration => (pair.Key, declaration.TypeFullName)))
             .GroupBy(pair => pair.TypeFullName, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -580,7 +583,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             if (declaringTypeHandle.IsNil || !typeNames.TryGetValue(declaringTypeHandle, out var declaringTypeName))
                 continue;
 
-            var ownerDocuments = ResolveOwnerDocuments(typeName, declaringTypeName, typeDocuments, declarationDocumentsByType, sourceByNormalizedPath);
+            var ownerDocuments = ResolveOwnerDocuments(typeName, declaringTypeName, typeDocuments,
+                declarationDocumentsByType, sourceByNormalizedPath);
             foreach (var ownerDocument in ownerDocuments)
             {
                 if (!declarationsByDocument.TryGetValue(ownerDocument, out var declarations))
@@ -620,21 +624,20 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
         return documents.Count > 0
             ? PreferNestedTypeDocument(typeName,
-                AddExpectedNestedTypeDocumentCandidates(typeName, OrderDocuments(documents, sourceByNormalizedPath), sourceByNormalizedPath))
+                AddExpectedNestedTypeDocumentCandidates(typeName, OrderDocuments(documents, sourceByNormalizedPath),
+                    sourceByNormalizedPath))
             : [];
     }
 
     private static List<string> OrderDocuments(
         IEnumerable<string> documents,
-        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
-    {
-        return documents
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath) =>
+        documents
             .AsValueEnumerable()
             .Where(sourceByNormalizedPath.ContainsKey)
             .OrderBy(document => sourceByNormalizedPath[document].IsGenerated)
             .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
             .ToList();
-    }
 
     private static Dictionary<string, HashSet<string>> BuildTypeDocumentMap(
         IReadOnlyDictionary<string, List<SourceFileMethodEntry>> docToMethods)
@@ -642,17 +645,15 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
         foreach (var pair in docToMethods)
+        foreach (var method in pair.Value)
         {
-            foreach (var method in pair.Value)
+            if (!result.TryGetValue(method.TypeFullName, out var documents))
             {
-                if (!result.TryGetValue(method.TypeFullName, out var documents))
-                {
-                    documents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    result[method.TypeFullName] = documents;
-                }
-
-                documents.Add(pair.Key);
+                documents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                result[method.TypeFullName] = documents;
             }
+
+            documents.Add(pair.Key);
         }
 
         return result;
