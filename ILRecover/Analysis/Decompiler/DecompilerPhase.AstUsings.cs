@@ -341,7 +341,7 @@ public partial class DecompilerPhase
         {
             var convertedType = astBuilder.ConvertType(type);
             if (IsShadowedExpressionTypeReference(originalType, convertedType, type))
-                return PreserveNamedTupleElementNames(originalType, TryCreateShorterType(type) ?? convertedType);
+                return PreserveNamedTupleElementNames(originalType, TryCreateShorterType(type) ?? CreateFullyQualifiedType(type));
             if (!IsFullyQualifiedMemberType(convertedType))
                 return PreserveNamedTupleElementNames(originalType, convertedType);
             if (IsNestedType(type))
@@ -375,8 +375,7 @@ public partial class DecompilerPhase
 
         private bool IsShadowedExpressionTypeReference(AstType originalType, AstType convertedType, IType type) =>
             IsBareTypeReferenceExpression(originalType, convertedType, type)
-            && HasEnclosingNonTypeMemberNamed(originalType, type.Name)
-            && TryCreateShorterType(type) is not null;
+            && HasEnclosingNonTypeMemberNamed(originalType, type.Name);
 
         private static bool IsBareTypeReferenceExpression(AstType originalType, AstType convertedType, IType type)
         {
@@ -416,6 +415,16 @@ public partial class DecompilerPhase
             }
 
             return null;
+        }
+
+        private AstType CreateFullyQualifiedType(IType type)
+        {
+            var fullNameParts = string.IsNullOrWhiteSpace(type.Namespace)
+                ? [type.Name]
+                : type.Namespace.Split('.').Append(type.Name).ToArray();
+            var fullType = BuildType(fullNameParts, type.TypeArguments);
+            fullType.AddAnnotation(new TypeResolveResult(type));
+            return fullType;
         }
 
         private IEnumerable<string[]> GetTypeNameCandidates(IType type)
