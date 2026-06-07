@@ -22,7 +22,7 @@ ILRecover.exe -i "DLL_Folder" -o "Output_Folder" -cs 14 -dn "net10.0" -dp "Depen
 2. Clone this repository
 
 ```sh
-git clone https://github.com/KaniArchive/ILRecover
+git clone --recursive https://github.com/KaniArchive/ILRecover
 cd ILRecover
 ```
 
