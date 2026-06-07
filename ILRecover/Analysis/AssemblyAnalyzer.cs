@@ -31,14 +31,14 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
         var typeNames = BuildTypeNameLookup(mdReader);
         var docToMethods = BuildDocumentMethodMap(mdReader, pdbPath, typeNames, methodLocalVariables);
-
         var sourceByNormalizedPath = pdbSources
             .AsValueEnumerable()
             .GroupBy(s => NormalizePath(s.OriginalPath))
             .ToDictionary(g => g.Key, g => g.First());
+        RemoveNonPreferredNestedTypeMethods(docToMethods, sourceByNormalizedPath);
 
         var typeDocuments = BuildTypeDocumentMap(docToMethods);
-        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
+        var typeDeclarationsByDocument = BuildTypeDeclarationDocumentMap(mdReader, pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
 
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();
@@ -85,6 +85,74 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             .ToList());
 
         return new AnalysisResult(mapped, skipped, pdbSources);
+    }
+
+    private static void RemoveNonPreferredNestedTypeMethods(
+        Dictionary<string, List<SourceFileMethodEntry>> methodsByDocument,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        var methodsByType = methodsByDocument
+            .AsValueEnumerable()
+            .SelectMany(pair => pair.Value
+                .AsValueEnumerable()
+                .Select(method => (Document: pair.Key, Method: method)))
+            .GroupBy(entry => entry.Method.TypeFullName, StringComparer.Ordinal)
+            .ToList();
+
+        methodsByDocument.Clear();
+
+        foreach (var group in methodsByType)
+        {
+            var entries = group.ToList();
+            if (IsNestedType(group.Key))
+            {
+                var documents = entries
+                    .AsValueEnumerable()
+                    .Select(entry => entry.Document)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var preferredDocuments = PreferNestedTypeDocument(
+                        group.Key,
+                        AddExpectedNestedTypeDocumentCandidates(group.Key, documents, sourceByNormalizedPath))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (preferredDocuments.Count > 0)
+                {
+                    if (entries.Any(entry => preferredDocuments.Contains(entry.Document)))
+                    {
+                        entries = entries
+                        .AsValueEnumerable()
+                        .Where(entry => preferredDocuments.Contains(entry.Document))
+                        .ToList();
+                    }
+                    else if (preferredDocuments.Count == 1)
+                    {
+                        var preferredDocument = preferredDocuments.Single();
+                        foreach (var entry in entries)
+                            AddMethod(methodsByDocument, preferredDocument, entry.Method);
+                        continue;
+                    }
+                }
+            }
+
+            foreach (var entry in entries)
+                AddMethod(methodsByDocument, entry.Document, entry.Method);
+        }
+
+        static void AddMethod(
+            Dictionary<string, List<SourceFileMethodEntry>> methodsByDocument,
+            string document,
+            SourceFileMethodEntry method)
+        {
+            if (!methodsByDocument.TryGetValue(document, out var methods))
+            {
+                methods = [];
+                methodsByDocument[document] = methods;
+            }
+
+            if (!methods.Any(existing => existing.MethodHandle == method.MethodHandle))
+                methods.Add(method);
+        }
     }
 
     private static Dictionary<TypeDefinitionHandle, string> BuildTypeNameLookup(MetadataReader reader)
@@ -170,6 +238,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
 
     private static Dictionary<string, List<SourceFileTypeDeclarationEntry>> BuildTypeDeclarationDocumentMap(
+        MetadataReader mdReader,
         string pdbPath,
         IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
         IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath,
@@ -208,6 +277,10 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                     .ToList();
             }
 
+            if (IsNestedType(typeName))
+                ownerDocuments = PreferNestedTypeDocument(typeName,
+                    AddExpectedNestedTypeDocumentCandidates(typeName, ownerDocuments, sourceByNormalizedPath));
+
             if (ownerDocuments.Count == 0)
                 continue;
 
@@ -223,7 +296,344 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             }
         }
 
+        RemoveNonPreferredNestedTypeDeclarations(result, sourceByNormalizedPath);
+        AddNestedTypeDeclarations(mdReader, typeNames, result, typeDocuments, sourceByNormalizedPath);
+        RemoveNonPreferredNestedTypeDeclarations(result, sourceByNormalizedPath);
         return result;
+    }
+
+    private static void RemoveNonPreferredNestedTypeDeclarations(
+        Dictionary<string, List<SourceFileTypeDeclarationEntry>> declarationsByDocument,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        var declarationsByType = declarationsByDocument
+            .AsValueEnumerable()
+            .SelectMany(pair => pair.Value
+                .AsValueEnumerable()
+                .Select(declaration => (Document: pair.Key, Declaration: declaration)))
+            .GroupBy(entry => entry.Declaration.TypeFullName, StringComparer.Ordinal)
+            .ToList();
+
+        declarationsByDocument.Clear();
+
+        foreach (var group in declarationsByType)
+        {
+            var entries = group.ToList();
+            if (IsNestedType(group.Key))
+            {
+                var documents = entries
+                    .AsValueEnumerable()
+                    .Select(entry => entry.Document)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var preferredDocuments = PreferNestedTypeDocument(
+                        group.Key,
+                        AddExpectedNestedTypeDocumentCandidates(group.Key, documents, sourceByNormalizedPath))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (preferredDocuments.Count > 0)
+                {
+                    if (entries.Any(entry => preferredDocuments.Contains(entry.Document)))
+                    {
+                        entries = entries
+                        .AsValueEnumerable()
+                        .Where(entry => preferredDocuments.Contains(entry.Document))
+                        .ToList();
+                    }
+                    else if (preferredDocuments.Count == 1)
+                    {
+                        var preferredDocument = preferredDocuments.Single();
+                        foreach (var entry in entries)
+                            AddDeclaration(declarationsByDocument, preferredDocument, entry.Declaration);
+                        continue;
+                    }
+                }
+            }
+
+            foreach (var entry in entries)
+                AddDeclaration(declarationsByDocument, entry.Document, entry.Declaration);
+        }
+
+        static void AddDeclaration(
+            Dictionary<string, List<SourceFileTypeDeclarationEntry>> declarationsByDocument,
+            string document,
+            SourceFileTypeDeclarationEntry declaration)
+        {
+            if (!declarationsByDocument.TryGetValue(document, out var declarations))
+            {
+                declarations = [];
+                declarationsByDocument[document] = declarations;
+            }
+
+            if (!declarations.Any(existing => existing.TypeHandle == declaration.TypeHandle))
+                declarations.Add(declaration);
+        }
+    }
+
+    private static List<string> PreferNestedTypeDocument(string typeName, List<string> documents)
+    {
+        var expectedFileName = GetNestedTypeDocumentFileName(typeName);
+        if (expectedFileName is not null)
+        {
+            var preferredDocuments = documents
+                .AsValueEnumerable()
+                .Where(document => string.Equals(GetDocumentFileName(document), expectedFileName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (preferredDocuments.Count > 0)
+                return preferredDocuments;
+        }
+
+        var suffixMatchedDocuments = documents
+            .AsValueEnumerable()
+            .Where(document => NestedTypeNameMatchesPartialSuffix(typeName, document))
+            .ToList();
+
+        if (suffixMatchedDocuments.Count > 0)
+            return suffixMatchedDocuments;
+
+        var declaringTypeFileName = GetDeclaringTypeDocumentFileName(typeName);
+        if (declaringTypeFileName is not null)
+        {
+            var declaringTypeDocuments = documents
+                .AsValueEnumerable()
+                .Where(document => string.Equals(GetDocumentFileName(document), declaringTypeFileName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (declaringTypeDocuments.Count > 0)
+                return declaringTypeDocuments;
+        }
+
+        return documents
+            .AsValueEnumerable()
+            .OrderBy(document => document, StringComparer.OrdinalIgnoreCase)
+            .Take(1)
+            .ToList();
+    }
+
+    private static List<string> AddExpectedNestedTypeDocumentCandidates(
+        string typeName,
+        List<string> documents,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        if (documents.Count == 0)
+            return documents;
+
+        var expectedFileNames = new[] { GetNestedTypeDocumentFileName(typeName), GetDeclaringTypeDocumentFileName(typeName) }
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (expectedFileNames.Count == 0)
+            return documents;
+
+        var result = documents.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var document in documents)
+        {
+            var directory = GetDocumentDirectory(document);
+            foreach (var expectedFileName in expectedFileNames)
+            {
+                var candidate = string.IsNullOrEmpty(directory)
+                    ? expectedFileName
+                    : directory + "/" + expectedFileName;
+                candidate = NormalizePath(candidate);
+                if (sourceByNormalizedPath.ContainsKey(candidate))
+                    result.Add(candidate);
+            }
+        }
+
+        return result
+            .AsValueEnumerable()
+            .OrderBy(document => sourceByNormalizedPath.TryGetValue(document, out var source) && source.IsGenerated)
+            .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string GetDocumentDirectory(string document)
+    {
+        var normalized = document.Replace('\\', '/');
+        var separatorIndex = normalized.LastIndexOf('/');
+        return separatorIndex >= 0 ? normalized[..separatorIndex] : string.Empty;
+    }
+
+    private static string? GetDeclaringTypeDocumentFileName(string typeName)
+    {
+        var nestedParts = typeName.Split('+');
+        if (nestedParts.Length < 2)
+            return null;
+
+        var rootTypeName = nestedParts[0];
+        var rootSimpleName = rootTypeName[(rootTypeName.LastIndexOf('.') + 1)..];
+        if (string.IsNullOrWhiteSpace(rootSimpleName))
+            return null;
+
+        var declaringTypeNameParts = nestedParts
+            .AsValueEnumerable()
+            .Skip(1)
+            .Take(nestedParts.Length - 2)
+            .Select(RemoveGenericArity)
+            .Prepend(RemoveGenericArity(rootSimpleName))
+            .ToList();
+
+        return string.Join('.', declaringTypeNameParts) + ".cs";
+    }
+
+    private static bool NestedTypeNameMatchesPartialSuffix(string typeName, string document)
+    {
+        var nestedIndex = typeName.LastIndexOf('+');
+        if (nestedIndex < 0 || nestedIndex == typeName.Length - 1)
+            return false;
+
+        var nestedSimpleName = RemoveGenericArity(typeName[(nestedIndex + 1)..]);
+        var declaringTypeFileName = GetDeclaringTypeDocumentFileName(typeName);
+        if (declaringTypeFileName is null)
+            return false;
+
+        var fileName = GetDocumentFileName(document);
+        if (!fileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(fileName, declaringTypeFileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var declaringBaseName = declaringTypeFileName[..^3];
+        if (!fileName.StartsWith(declaringBaseName + ".", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var suffix = fileName[(declaringBaseName.Length + 1)..^3];
+        return suffix
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Any(part => NestedTypeNameEndsWithPartialName(nestedSimpleName, part));
+    }
+
+    private static bool NestedTypeNameEndsWithPartialName(string nestedSimpleName, string partialName)
+    {
+        if (string.IsNullOrWhiteSpace(partialName))
+            return false;
+
+        return nestedSimpleName.EndsWith(partialName, StringComparison.OrdinalIgnoreCase)
+            || partialName.EndsWith("s", StringComparison.OrdinalIgnoreCase)
+            && nestedSimpleName.EndsWith(partialName[..^1], StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetDocumentFileName(string document)
+    {
+        var normalized = document.Replace('\\', '/');
+        var separatorIndex = normalized.LastIndexOf('/');
+        return separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized;
+    }
+
+    private static string? GetNestedTypeDocumentFileName(string typeName)
+    {
+        var nestedParts = typeName.Split('+');
+        if (nestedParts.Length < 2)
+            return null;
+
+        var rootTypeName = nestedParts[0];
+        var rootSimpleName = rootTypeName[(rootTypeName.LastIndexOf('.') + 1)..];
+        if (string.IsNullOrWhiteSpace(rootSimpleName))
+            return null;
+
+        var typeNameParts = nestedParts
+            .AsValueEnumerable()
+            .Skip(1)
+            .Select(RemoveGenericArity)
+            .Prepend(RemoveGenericArity(rootSimpleName))
+            .ToList();
+
+        return string.Join('.', typeNameParts) + ".cs";
+    }
+
+    private static string RemoveGenericArity(string name)
+    {
+        var arityIndex = name.IndexOf('`');
+        return arityIndex >= 0 ? name[..arityIndex] : name;
+    }
+
+    private static void AddNestedTypeDeclarations(
+        MetadataReader reader,
+        IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
+        Dictionary<string, List<SourceFileTypeDeclarationEntry>> declarationsByDocument,
+        IReadOnlyDictionary<string, HashSet<string>> typeDocuments,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        var mappedHandles = declarationsByDocument.Values
+            .AsValueEnumerable()
+            .SelectMany(declarations => declarations)
+            .Select(declaration => declaration.TypeHandle)
+            .ToHashSet();
+
+        var declarationDocumentsByType = declarationsByDocument
+            .AsValueEnumerable()
+            .SelectMany(pair => pair.Value.AsValueEnumerable().Select(declaration => (pair.Key, declaration.TypeFullName)))
+            .GroupBy(pair => pair.TypeFullName, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.AsValueEnumerable().Select(pair => pair.Key).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.Ordinal);
+
+        foreach (var pair in typeNames)
+        {
+            var typeHandle = pair.Key;
+            var typeName = pair.Value;
+            if (!IsNestedType(typeName) || IsCompilerGenerated(typeName) || mappedHandles.Contains(typeHandle))
+                continue;
+
+            var declaringTypeHandle = reader.GetTypeDefinition(typeHandle).GetDeclaringType();
+            if (declaringTypeHandle.IsNil || !typeNames.TryGetValue(declaringTypeHandle, out var declaringTypeName))
+                continue;
+
+            var ownerDocuments = ResolveOwnerDocuments(typeName, declaringTypeName, typeDocuments, declarationDocumentsByType, sourceByNormalizedPath);
+            foreach (var ownerDocument in ownerDocuments)
+            {
+                if (!declarationsByDocument.TryGetValue(ownerDocument, out var declarations))
+                {
+                    declarations = [];
+                    declarationsByDocument[ownerDocument] = declarations;
+                }
+
+                declarations.Add(new SourceFileTypeDeclarationEntry(typeName, typeHandle));
+            }
+        }
+    }
+
+    private static List<string> ResolveOwnerDocuments(
+        string typeName,
+        string declaringTypeName,
+        IReadOnlyDictionary<string, HashSet<string>> typeDocuments,
+        IReadOnlyDictionary<string, HashSet<string>> declarationDocumentsByType,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        var documents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (typeDocuments.TryGetValue(typeName, out var ownMethodDocuments))
+            documents.UnionWith(ownMethodDocuments);
+
+        if (declarationDocumentsByType.TryGetValue(typeName, out var ownDeclarationDocuments))
+            documents.UnionWith(ownDeclarationDocuments);
+
+        if (documents.Count > 0)
+            return PreferNestedTypeDocument(typeName, OrderDocuments(documents, sourceByNormalizedPath));
+
+        if (typeDocuments.TryGetValue(declaringTypeName, out var methodDocuments))
+            documents.UnionWith(methodDocuments);
+
+        if (declarationDocumentsByType.TryGetValue(declaringTypeName, out var declarationDocuments))
+            documents.UnionWith(declarationDocuments);
+
+        return documents.Count > 0
+            ? PreferNestedTypeDocument(typeName,
+                AddExpectedNestedTypeDocumentCandidates(typeName, OrderDocuments(documents, sourceByNormalizedPath), sourceByNormalizedPath))
+            : [];
+    }
+
+    private static List<string> OrderDocuments(
+        IEnumerable<string> documents,
+        IReadOnlyDictionary<string, PdbSourceInfo> sourceByNormalizedPath)
+    {
+        return documents
+            .AsValueEnumerable()
+            .Where(sourceByNormalizedPath.ContainsKey)
+            .OrderBy(document => sourceByNormalizedPath[document].IsGenerated)
+            .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static Dictionary<string, HashSet<string>> BuildTypeDocumentMap(

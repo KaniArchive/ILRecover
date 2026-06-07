@@ -12,9 +12,9 @@ internal static partial class SourceGenNormalizer
 
     private static void NormalizeMemoryPack(SyntaxTree tree)
     {
-        foreach (var type in tree.Descendants.OfType<TypeDeclaration>())
+        foreach (var type in tree.Descendants.OfType<TypeDeclaration>().ToList())
         {
-            if (!HasAttribute(type, "MemoryPackable"))
+            if (!IsMemoryPackType(type))
                 continue;
 
             RemoveBaseTypes(type, "IMemoryPackable", "IMemoryPackFormatterRegister");
@@ -25,6 +25,14 @@ internal static partial class SourceGenNormalizer
                     nestedType.Remove();
             }
         }
+    }
+
+    private static bool IsMemoryPackType(TypeDeclaration type)
+    {
+        return HasAttribute(type, "MemoryPackable")
+               || type.BaseTypes.Any(baseType =>
+                   AstTypeContains(baseType, "IMemoryPackable")
+                   || AstTypeContains(baseType, "IMemoryPackFormatterRegister"));
     }
 
     private static void RemoveBaseTypes(TypeDeclaration type, params string[] typeNames)
