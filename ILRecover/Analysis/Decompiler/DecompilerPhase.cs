@@ -61,7 +61,7 @@ public partial class DecompilerPhase(
                 File.WriteAllText(outputPath, source);
                 written.Add(outputPath);
 
-                Log.Info(normalizedRelativePath);
+                Log.Success(normalizedRelativePath);
             }
             catch (Exception ex)
             {

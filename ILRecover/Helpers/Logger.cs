@@ -8,8 +8,8 @@ public static class Log
 {
     private static ILoggerFactory? _loggerFactory;
     private static ILogger? _logger;
+    private static ILogger? _successLogger;
     private static bool _isInitialized;
-    public static bool SuppressWarnings { get; set; }
 
     public static ILogger? Global
     {
@@ -20,65 +20,18 @@ public static class Log
         }
     }
 
-    public static void Info(string message)
-    {
-        EnsureInitialized();
-        _logger?.ZLogInformation($"{message}");
-    }
-
-    public static void Error(string message)
-    {
-        EnsureInitialized();
-        _logger?.ZLogError($"{message}");
-    }
-
-    public static void Error(string message, Exception exception)
-    {
-        EnsureInitialized();
-        _logger?.ZLogError(exception, $"{message}");
-    }
-
-    public static void Warning(string message)
-    {
-        if (SuppressWarnings) return;
-        EnsureInitialized();
-        _logger?.ZLogWarning($"{message}");
-    }
-
-    public static void Debug(string message)
-    {
-        EnsureInitialized();
-        _logger?.ZLogDebug($"{message}");
-    }
-
-    public static void EnableDebugLogging()
-    {
-        if (_isInitialized) Shutdown();
-        Initialize(LogLevel.Debug);
-    }
-
-    public static void Shutdown()
-    {
-        if (!_isInitialized) return;
-        _loggerFactory?.Dispose();
-        _loggerFactory = null;
-        _logger = null;
-        _isInitialized = false;
-        SuppressWarnings = false;
-    }
-
     private static void EnsureInitialized()
     {
         if (_isInitialized) return;
-        Initialize(LogLevel.Information);
+        InitializeLogger(LogLevel.Information);
     }
 
-    private static void Initialize(LogLevel minimumLevel)
+    private static void InitializeLogger(LogLevel minLevel)
     {
         _loggerFactory = LoggerFactory.Create(logging =>
         {
             logging.ClearProviders();
-            logging.SetMinimumLevel(minimumLevel);
+            logging.SetMinimumLevel(minLevel);
 
             logging.AddZLoggerConsole(options =>
             {
@@ -88,7 +41,9 @@ public static class Log
                         (in template, in info) =>
                         {
                             var timestamp = Chalk.Gray + info.Timestamp.Local.ToString("HH:mm:ss");
-                            var logLevel = GetColoredLogLevel(info.LogLevel);
+                            var logLevel = info.Category.Name == "ILRecover.Success"
+                                ? Chalk.Green + "[SUC]"
+                                : GetColoredLogLevel(info.LogLevel);
                             template.Format(timestamp, logLevel);
                         });
                 });
@@ -96,7 +51,8 @@ public static class Log
             });
         });
 
-        _logger = _loggerFactory.CreateLogger("DLLDecompiler");
+        _logger = _loggerFactory.CreateLogger("ILRecover");
+        _successLogger = _loggerFactory.CreateLogger("ILRecover.Success");
         _isInitialized = true;
     }
 
@@ -111,4 +67,62 @@ public static class Log
             LogLevel.Critical => Chalk.BgRed.White + "[CRT]",
             _ => Chalk.White + "[???]"
         };
+
+    public static void Info(string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogInformation($"{message}");
+    }
+
+    public static void Success(string message)
+    {
+        EnsureInitialized();
+        _successLogger?.ZLogInformation($"{message}");
+    }
+
+    public static void Error(string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogError($"{message}");
+    }
+
+    public static void Error(Exception exception, string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogError(exception, $"{message}");
+    }
+
+    public static void Warning(string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogWarning($"{message}");
+    }
+
+    public static void Debug(string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogDebug($"{message}");
+    }
+
+    public static void Verbose(string message)
+    {
+        EnsureInitialized();
+        _logger?.ZLogTrace($"{message}");
+    }
+
+    public static void EnableDebugLogging()
+    {
+        if (_isInitialized) Shutdown();
+        InitializeLogger(LogLevel.Debug);
+    }
+
+    public static void Shutdown()
+    {
+        if (!_isInitialized) return;
+        _loggerFactory?.Dispose();
+        _loggerFactory = null;
+        _logger = null;
+        _successLogger = null;
+        _isInitialized = false;
+    }
 }

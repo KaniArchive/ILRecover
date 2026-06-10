@@ -38,7 +38,7 @@ public static class Parser
             Log.Info("Analyzing...");
             var analyzer = new AssemblyAnalyzer(target.DllPath, target.PdbPath);
             var result = analyzer.Analyze();
-            Log.Info($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
+            Log.Success($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
 
             Log.Info("Writing csproj...");
             var builder = new RecoveredProjectFileBuilder(
@@ -51,7 +51,7 @@ public static class Parser
                 dependencyDirs);
             var projectPath = builder.Build();
             projectPaths.Add(projectPath);
-            Log.Info($"Wrote: {projectPath}");
+            Log.Success($"Wrote: {projectPath}");
 
             Log.Info("Decompiling...");
             var phase = new DecompilerPhase(
@@ -64,14 +64,14 @@ public static class Parser
                 target.PdbPath);
             phase.Run();
 
-            Log.Info($"Done: {outputDir}");
+            Log.Success($"Done: {outputDir}");
         }
 
         Log.Info("Writing solution...");
         var solutionPath = new RecoveredSolutionFileBuilder(output, solution, projectPaths).Build();
-        Log.Info($"Wrote: {solutionPath}");
+        Log.Success($"Wrote: {solutionPath}");
 
-        Log.Info("All Done!");
+        Log.Success("All Done!");
     }
 
     private static List<TargetProject> ValidateAndResolveTargets(string dllFolder)
