@@ -3,14 +3,14 @@ namespace ILRecover.CLI;
 public static class Args
 {
     /// <summary>
-    ///     DLL Decompiler
+    ///     Decompile .NET assemblies back to C# source
     /// </summary>
-    /// <param name="input">-i, Input.</param>
-    /// <param name="output">-o, Outputy.</param>
-    /// <param name="csVersion">-cs, C# Version.</param>
-    /// <param name="dependencies">-dp, Dependencies.</param>
-    /// <param name="solution">-sl, Solution name.</param>
-    /// <param name="dotnet">-dn, Target framework.</param>
+    /// <param name="input">-i, Path to the directory containing the target .dll and .pdb files.</param>
+    /// <param name="output">-o, Path for the decompiled output.</param>
+    /// <param name="csVersion">-cs, C# language version (8, 9, 10, 11, 12, 13, 14).</param>
+    /// <param name="dependencies">-dp, Path to the folder containing DLL references.</param>
+    /// <param name="solution">-sl, Name of the solution.</param>
+    /// <param name="dotnet">-dn, Target .NET framework (e.g. net9.0).</param>
     public static void Run(
         string input,
         string output,
