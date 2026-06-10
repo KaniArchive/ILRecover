@@ -86,7 +86,7 @@ public static class Log
         _logger?.ZLogError($"{message}");
     }
 
-    public static void Error(Exception exception, string message)
+    public static void Error(string message, Exception exception)
     {
         EnsureInitialized();
         _logger?.ZLogError(exception, $"{message}");
