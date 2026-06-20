@@ -3,6 +3,7 @@ using ICSharpCode.Decompiler.Metadata;
 using ILRecover.Analysis;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
+using System.Reflection.PortableExecutable;
 using ZLinq;
 
 namespace ILRecover.CLI;
@@ -36,13 +37,13 @@ public static class Parser
             }
 
             Log.Info("Analyzing...");
-            var analyzer = new AssemblyAnalyzer(target.DllPath, target.PdbPath);
+            var analyzer = new AssemblyAnalyzer(target.AssemblyPath, target.PdbPath);
             var result = analyzer.Analyze();
             Log.Success($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
 
             Log.Info("Writing csproj...");
             var builder = new RecoveredProjectFileBuilder(
-                target.DllPath,
+                target.AssemblyPath,
                 outputDir,
                 target.Name,
                 target.ProjectRefs,
@@ -55,7 +56,7 @@ public static class Parser
 
             Log.Info("Decompiling...");
             var phase = new DecompilerPhase(
-                target.DllPath,
+                target.AssemblyPath,
                 result.Mapped,
                 outputDir,
                 csVersionStr,
@@ -74,19 +75,21 @@ public static class Parser
         Log.Success("All Done!");
     }
 
-    private static List<TargetProject> ValidateAndResolveTargets(string dllFolder)
+    private static List<TargetProject> ValidateAndResolveTargets(string inputFolder)
     {
-        if (!Directory.Exists(dllFolder))
+        if (!Directory.Exists(inputFolder))
         {
-            Log.Error($"Input folder not found: {dllFolder}");
+            Log.Error($"Input folder not found: {inputFolder}");
             Log.Shutdown();
             Environment.Exit(1);
         }
 
-        var targets = Directory.GetFiles(dllFolder, "*.dll")
+        var targets = Directory.GetFiles(inputFolder)
             .AsValueEnumerable()
+            .Where(IsTargetAssemblyPath)
+            .Where(HasManagedMetadata)
             .Select(p => (
-                DllPath: p,
+                AssemblyPath: p,
                 PdbPath: Path.ChangeExtension(p, ".pdb"),
                 Name: Path.GetFileNameWithoutExtension(p)
             ))
@@ -95,7 +98,7 @@ public static class Parser
 
         if (targets.Count == 0)
         {
-            Log.Error($"No target dlls with matching pdbs found in {dllFolder}");
+            Log.Error($"No target managed assemblies with matching pdbs found in {inputFolder}");
             Log.Shutdown();
             Environment.Exit(1);
         }
@@ -109,7 +112,7 @@ public static class Parser
             .AsValueEnumerable()
             .Select(t => (
                 t.Name,
-                References: ReadAssemblyReferenceNames(t.DllPath)
+                References: ReadAssemblyReferenceNames(t.AssemblyPath)
                     .Where(name => !projectNames.Contains(name))
                     .ToList()))
             .ToDictionary(t => t.Name, t => t.References, StringComparer.OrdinalIgnoreCase);
@@ -117,11 +120,32 @@ public static class Parser
         return targets
             .AsValueEnumerable()
             .Select(t => new TargetProject(
-                t.DllPath,
+                t.AssemblyPath,
                 t.PdbPath,
                 t.Name,
-                BuildProjectRefs(t.DllPath, t.Name, projectNames, targetReferences)))
+                BuildProjectRefs(t.AssemblyPath, t.Name, projectNames, targetReferences)))
             .ToList();
+    }
+
+    private static bool IsTargetAssemblyPath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasManagedMetadata(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            return reader.HasMetadata;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static List<ProjectReferenceInfo> BuildProjectRefs(
@@ -151,7 +175,7 @@ public static class Parser
     }
 
     private sealed record TargetProject(
-        string DllPath,
+        string AssemblyPath,
         string PdbPath,
         string Name,
         List<ProjectReferenceInfo> ProjectRefs);

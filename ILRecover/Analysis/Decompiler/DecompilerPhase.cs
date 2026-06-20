@@ -4,6 +4,7 @@ using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
+using ICSharpCode.ILSpyX.PdbProvider;
 using ILRecover.Analysis.SourceGen;
 using ILRecover.Helpers;
 using ILRecover.Models;
@@ -36,37 +37,46 @@ public partial class DecompilerPhase(
 
     public void Run()
     {
-        using var debugInfoProvider = BuildDebugInfoProvider();
-        var decompiler = BuildDecompiler(debugInfoProvider);
-        var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
-        _sliceSourceFiles = userFiles;
-
-        var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var file in userFiles)
+        var debugInfoProvider = BuildDebugInfoProvider();
+        try
         {
-            if (file.Methods.Count == 0 &&
-                (file.TypeDeclarations is null || file.TypeDeclarations.Count == 0)) continue;
+            var decompiler = BuildDecompiler(debugInfoProvider);
+            var userFiles = ExpandFilesWithGeneratedCompanions(mapped);
+            _sliceSourceFiles = userFiles;
 
-            var normalizedRelativePath = NormalizeOutputRelativePath(file.RelativePath);
-            var outputPath = Path.Combine(outputDir, normalizedRelativePath);
-            if (written.Contains(outputPath)) continue;
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            try
+            foreach (var file in userFiles)
             {
-                var source = DecompileFile(decompiler, file);
-                if (source is null) continue;
+                if (!file.DecompileWholeTypes &&
+                    file.Methods.Count == 0 &&
+                    (file.TypeDeclarations is null || file.TypeDeclarations.Count == 0)) continue;
 
-                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-                File.WriteAllText(outputPath, source);
-                written.Add(outputPath);
+                var normalizedRelativePath = NormalizeOutputRelativePath(file.RelativePath);
+                var outputPath = Path.Combine(outputDir, normalizedRelativePath);
+                if (written.Contains(outputPath)) continue;
 
-                Log.Success(normalizedRelativePath);
+                try
+                {
+                    var source = DecompileFile(decompiler, file);
+                    if (source is null) continue;
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+                    File.WriteAllText(outputPath, source);
+                    written.Add(outputPath);
+
+                    Log.Success(normalizedRelativePath);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"Skip: {normalizedRelativePath} ({ex.Message})");
+                }
             }
-            catch (Exception ex)
-            {
-                Log.Error($"Skip: {normalizedRelativePath} ({ex.Message})");
-            }
+        }
+        finally
+        {
+            if (debugInfoProvider is IDisposable disposable)
+                disposable.Dispose();
         }
     }
 
@@ -136,6 +146,9 @@ public partial class DecompilerPhase(
 
     private string? DecompileFile(CSharpDecompiler decompiler, SourceFileMap file)
     {
+        if (file.DecompileWholeTypes)
+            return DecompileWholeTypes(decompiler, file);
+
         var typeNames = file.TypeFullNames
             .AsValueEnumerable()
             .Where(typeName => !IsCompilerGenerated(typeName))
@@ -164,6 +177,35 @@ public partial class DecompilerPhase(
         ResolveFileLocalUsings(combinedTree, decompiler);
         var source = SyntaxTreeToString(combinedTree);
         return PostProcessSource(source);
+    }
+
+    private string? DecompileWholeTypes(CSharpDecompiler decompiler, SourceFileMap file)
+    {
+        var typeNames = file.TypeFullNames
+            .AsValueEnumerable()
+            .Where(typeName => !IsCompilerGenerated(typeName))
+            .Select(GetRootTypeName)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (typeNames.Count == 0)
+            return null;
+
+        SyntaxTree? combinedTree = null;
+        foreach (var typeName in typeNames)
+        {
+            var tree = decompiler.DecompileType(new FullTypeName(typeName));
+            SourceGenNormalizer.Normalize(tree);
+            combinedTree = combinedTree is null
+                ? tree
+                : MergeSyntaxTrees(combinedTree, tree);
+        }
+
+        if (combinedTree is null)
+            return null;
+
+        ResolveFileLocalUsings(combinedTree, decompiler);
+        return PostProcessSource(SyntaxTreeToString(combinedTree));
     }
 
     private SyntaxTree? SliceTypeForFile(
@@ -294,14 +336,14 @@ public partial class DecompilerPhase(
             : $".NETCoreApp,Version=v{normalized}";
     }
 
-    private PortablePdbDebugInfoProvider? BuildDebugInfoProvider()
+    private IDebugInfoProvider? BuildDebugInfoProvider()
     {
         if (string.IsNullOrWhiteSpace(pdbPath) || !File.Exists(pdbPath))
             return null;
 
         try
         {
-            return new PortablePdbDebugInfoProvider(dllPath, pdbPath);
+            return DebugInfoUtils.FromFile(new PEFile(dllPath), pdbPath);
         }
         catch
         {

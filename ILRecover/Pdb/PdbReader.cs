@@ -1,5 +1,9 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
+using System.Text;
+using System.Text.RegularExpressions;
+using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.ILSpyX.PdbProvider;
 using ILRecover.Analysis.SourceGen;
 using ILRecover.Models;
 using ZLinq;
@@ -8,8 +12,25 @@ namespace ILRecover.Pdb;
 
 public static class PdbReader
 {
+    private static readonly Guid TypeDefinitionDocumentKind = new("932E74BC-DBA9-4478-8D46-0F32A7BAB3D3");
+
+    public static PdbFormat DetectFormat(string pdbPath)
+    {
+        using var fs = File.OpenRead(pdbPath);
+        Span<byte> header = stackalloc byte[4];
+        if (fs.Read(header) != header.Length)
+            return PdbFormat.Portable;
+
+        return header[0] == 0x4D && header[1] == 0x69 && header[2] == 0x63 && header[3] == 0x72
+            ? PdbFormat.Windows
+            : PdbFormat.Portable;
+    }
+
     public static List<PdbSourceInfo> ReadSourceFiles(string pdbPath)
     {
+        if (DetectFormat(pdbPath) == PdbFormat.Windows)
+            return ReadWindowsSourceFiles(pdbPath);
+
         using var fs = File.OpenRead(pdbPath);
         using var provider = MetadataReaderProvider.FromPortablePdbStream(fs);
         var reader = provider.GetMetadataReader();
@@ -19,48 +40,137 @@ public static class PdbReader
             .. reader.Documents
                 .AsValueEnumerable()
                 .Select(reader.GetDocument)
-                .Select(d => reader.GetString(d.Name))
-                .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Select(p => new PdbSourceInfo(p, IsGenerated(p)))
+                .Select(document => reader.GetString(document.Name))
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => new PdbSourceInfo(path, IsGenerated(path)))
         ];
     }
 
-    public static Dictionary<int, IReadOnlyList<LocalVariableDebugInfo>> ReadMethodLocalVariables(string pdbPath)
+    private static List<PdbSourceInfo> ReadWindowsSourceFiles(string pdbPath)
     {
+        var text = Encoding.ASCII.GetString(File.ReadAllBytes(pdbPath));
+        return Regex.Matches(text, @"[A-Za-z]:\\[^\x00\r\n\t<>|""?*]+?\.cs")
+            .AsValueEnumerable()
+            .Select(match => match.Value)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .GroupBy(NormalizePath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path => new PdbSourceInfo(path, IsGenerated(path)))
+            .ToList();
+    }
+
+    public static Dictionary<int, IReadOnlyList<LocalVariableDebugInfo>> ReadMethodLocalVariables(
+        string assemblyPath,
+        string pdbPath)
+    {
+        using var file = new PEFile(assemblyPath);
+        var debugInfo = DebugInfoUtils.FromFile(file, pdbPath);
+        if (debugInfo is null)
+            return [];
+
+        try
+        {
+            var result = new Dictionary<int, IReadOnlyList<LocalVariableDebugInfo>>();
+            foreach (var methodHandle in file.Metadata.MethodDefinitions)
+            {
+                var variables = debugInfo.GetVariables(methodHandle)
+                    .AsValueEnumerable()
+                    .Where(variable => !string.IsNullOrWhiteSpace(variable.Name) && !IsGeneratedLocal(variable.Name))
+                    .Select(variable => new LocalVariableDebugInfo(variable.Index, variable.Name, 0, 0))
+                    .ToList();
+
+                if (variables.Count > 0)
+                    result[MetadataTokens.GetRowNumber(methodHandle)] = variables;
+            }
+
+            return result;
+        }
+        finally
+        {
+            if (debugInfo is IDisposable disposable)
+                disposable.Dispose();
+        }
+    }
+
+    public static Dictionary<int, string> ReadMethodDocumentPaths(string assemblyPath, string pdbPath)
+    {
+        using var file = new PEFile(assemblyPath);
+        var debugInfo = DebugInfoUtils.FromFile(file, pdbPath);
+        if (debugInfo is null)
+            return [];
+
+        try
+        {
+            var result = new Dictionary<int, string>();
+            foreach (var methodHandle in file.Metadata.MethodDefinitions)
+            {
+                var documentPath = debugInfo.GetSequencePoints(methodHandle)
+                    .AsValueEnumerable()
+                    .Where(point => !string.IsNullOrWhiteSpace(point.DocumentUrl) && point.StartLine != 0xFEEFEE)
+                    .Select(point => point.DocumentUrl)
+                    .FirstOrDefault();
+
+                if (!string.IsNullOrWhiteSpace(documentPath))
+                    result[MetadataTokens.GetRowNumber(methodHandle)] = documentPath;
+            }
+
+            return result;
+        }
+        finally
+        {
+            if (debugInfo is IDisposable disposable)
+                disposable.Dispose();
+        }
+    }
+
+    public static Dictionary<int, List<string>> ReadTypeDefinitionDocumentPaths(string pdbPath)
+    {
+        if (DetectFormat(pdbPath) == PdbFormat.Windows)
+            return [];
+
         using var fs = File.OpenRead(pdbPath);
         using var provider = MetadataReaderProvider.FromPortablePdbStream(fs);
         var reader = provider.GetMetadataReader();
+        var result = new Dictionary<int, List<string>>();
 
-        var result = new Dictionary<int, List<LocalVariableDebugInfo>>();
-
-        foreach (var scopeHandle in reader.LocalScopes)
+        foreach (var customDebugHandle in reader.CustomDebugInformation)
         {
-            var scope = reader.GetLocalScope(scopeHandle);
-            var methodRow = MetadataTokens.GetRowNumber(scope.Method);
+            var customDebugInfo = reader.GetCustomDebugInformation(customDebugHandle);
+            if (customDebugInfo.Parent.Kind != HandleKind.TypeDefinition || customDebugInfo.Kind.IsNil ||
+                customDebugInfo.Value.IsNil)
+                continue;
 
-            foreach (var localHandle in scope.GetLocalVariables())
-            {
-                var local = reader.GetLocalVariable(localHandle);
-                var name = reader.GetString(local.Name);
-                if (string.IsNullOrWhiteSpace(name) || IsGeneratedLocal(name))
-                    continue;
+            if (reader.GetGuid(customDebugInfo.Kind) != TypeDefinitionDocumentKind)
+                continue;
 
-                if (!result.TryGetValue(methodRow, out var list))
-                {
-                    list = [];
-                    result[methodRow] = list;
-                }
-
-                list.Add(new LocalVariableDebugInfo(local.Index, name, scope.StartOffset, scope.Length));
-            }
+            result[MetadataTokens.GetRowNumber((TypeDefinitionHandle)customDebugInfo.Parent)] =
+                ReadTypeDefinitionDocuments(reader, customDebugInfo.Value);
         }
 
-        return result.ToDictionary(
-            pair => pair.Key, IReadOnlyList<LocalVariableDebugInfo> (pair) => pair.Value
-                .AsValueEnumerable()
-                .OrderBy(local => local.StartOffset)
-                .ThenBy(local => local.SlotIndex)
-                .ToList());
+        return result;
+    }
+
+    private static List<string> ReadTypeDefinitionDocuments(MetadataReader reader, BlobHandle value)
+    {
+        var documents = new List<string>();
+        var blobReader = reader.GetBlobReader(value);
+        while (blobReader.RemainingBytes > 0)
+        {
+            var documentRowId = blobReader.ReadCompressedInteger();
+            if (documentRowId <= 0)
+                continue;
+
+            var documentHandle = MetadataTokens.DocumentHandle(documentRowId);
+            if (documentHandle.IsNil)
+                continue;
+
+            var documentPath = reader.GetString(reader.GetDocument(documentHandle).Name);
+            if (!string.IsNullOrWhiteSpace(documentPath))
+                documents.Add(NormalizePath(documentPath));
+        }
+
+        return documents;
     }
 
     private static bool IsGenerated(string path)
@@ -77,4 +187,7 @@ public static class PdbReader
         name.StartsWith("CS$", StringComparison.Ordinal)
         || name.StartsWith("<", StringComparison.Ordinal)
         || name.Contains("__", StringComparison.Ordinal);
+
+    private static string NormalizePath(string path) =>
+        path.Replace('\\', '/').ToLowerInvariant();
 }

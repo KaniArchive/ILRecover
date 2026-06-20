@@ -5,6 +5,8 @@
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
         <ImplicitUsings>enable</ImplicitUsings>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
         <RootNamespace>ILRecover</RootNamespace>
         <PublishAot>true</PublishAot>
     </PropertyGroup>
@@ -21,5 +23,6 @@
     </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\ILSpy\ICSharpCode.Decompiler\ICSharpCode.Decompiler.csproj"/>
+        <ProjectReference Include="..\ILSpy\ICSharpCode.ILSpyX\ICSharpCode.ILSpyX.csproj"/>
     </ItemGroup>
 </Project>

@@ -8,7 +8,8 @@ public record SourceFileMap(
     bool IsGenerated,
     IReadOnlyList<SourceFileMethodEntry> Methods,
     IReadOnlyList<string>? DeclaredTypeFullNames = null,
-    IReadOnlyList<SourceFileTypeDeclarationEntry>? TypeDeclarations = null
+    IReadOnlyList<SourceFileTypeDeclarationEntry>? TypeDeclarations = null,
+    bool DecompileWholeTypes = false
 )
 {
     public IReadOnlyList<string> TypeFullNames =>

@@ -5,7 +5,7 @@ public static class Args
     /// <summary>
     ///     Decompile .NET assemblies back to C# source
     /// </summary>
-    /// <param name="input">-i, Path to the directory containing the target .dll and .pdb files.</param>
+    /// <param name="input">-i, Path to the directory containing the target .dll/.exe and .pdb files.</param>
     /// <param name="output">-o, Path for the decompiled output.</param>
     /// <param name="csVersion">-cs, C# language version (8, 9, 10, 11, 12, 13, 14).</param>
     /// <param name="dependencies">-dp, Path to the folder containing DLL references.</param>

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using ICSharpCode.Decompiler.Metadata;
@@ -9,8 +10,6 @@ namespace ILRecover.Analysis;
 
 public class AssemblyAnalyzer(string dllPath, string pdbPath)
 {
-    private static readonly Guid TypeDefinitionDocumentKind = new("932E74BC-DBA9-4478-8D46-0F32A7BAB3D3");
-
     private static readonly HashSet<string> StateMachineAttributeNames =
     [
         "System.Runtime.CompilerServices.AsyncStateMachineAttribute",
@@ -23,14 +22,17 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     public AnalysisResult Analyze()
     {
         var pdbSources = PdbReader.ReadSourceFiles(pdbPath);
-        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(pdbPath);
+        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(dllPath, pdbPath);
         var commonSourceRoot = FindCommonSourceRoot(pdbSources.Select(source => source.OriginalPath));
 
         var file = new PEFile(dllPath);
         var mdReader = file.Metadata;
 
         var typeNames = BuildTypeNameLookup(mdReader);
-        var docToMethods = BuildDocumentMethodMap(mdReader, pdbPath, typeNames, methodLocalVariables);
+        var docToMethods = BuildDocumentMethodMap(mdReader, dllPath, pdbPath, typeNames, methodLocalVariables);
+        if (docToMethods.Count == 0)
+            return BuildFallbackAnalysis(mdReader, typeNames, pdbSources, commonSourceRoot);
+
         var sourceByNormalizedPath = pdbSources
             .AsValueEnumerable()
             .GroupBy(s => NormalizePath(s.OriginalPath))
@@ -86,6 +88,106 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             .ToList());
 
         return new AnalysisResult(mapped, skipped, pdbSources);
+    }
+
+    private AnalysisResult BuildFallbackAnalysis(
+        MetadataReader mdReader,
+        IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
+        IReadOnlyList<PdbSourceInfo> pdbSources,
+        string? commonSourceRoot)
+    {
+        var mapped = new List<SourceFileMap>();
+        var sourceByTypeName = BuildFallbackSourceLookup(pdbSources);
+
+        foreach (var typeHandle in mdReader.TypeDefinitions)
+        {
+            if (!typeNames.TryGetValue(typeHandle, out var typeName)
+                || IsCompilerGenerated(typeName)
+                || IsNestedType(typeName)
+                || IsEmbeddedInteropType(mdReader, typeHandle))
+                continue;
+
+            var declaredTypeFullNames = new[] { typeName };
+            var source = ResolveFallbackSource(typeName, pdbSources, sourceByTypeName);
+            var originalPath = source?.OriginalPath ?? $"{typeName}.cs";
+            var relativePath = source is null
+                ? $"{typeName}.cs"
+                : ToRelativePath(source.OriginalPath, commonSourceRoot);
+            mapped.Add(new SourceFileMap(originalPath, relativePath, source?.IsGenerated ?? false, [], declaredTypeFullNames,
+                [], true));
+        }
+
+        var mappedPaths = mapped
+            .AsValueEnumerable()
+            .Select(map => NormalizePath(map.OriginalPath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var skipped = pdbSources
+            .AsValueEnumerable()
+            .Where(source => !mappedPaths.Contains(NormalizePath(source.OriginalPath)))
+            .Select(source => source.OriginalPath)
+            .ToList();
+
+        return new AnalysisResult(mapped, skipped, pdbSources);
+    }
+
+    private static IReadOnlyDictionary<string, List<PdbSourceInfo>> BuildFallbackSourceLookup(
+        IReadOnlyList<PdbSourceInfo> pdbSources) =>
+        pdbSources
+            .AsValueEnumerable()
+            .GroupBy(source => Path.GetFileNameWithoutExtension(source.OriginalPath), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderBy(source => source.IsGenerated)
+                    .ThenBy(source => source.OriginalPath.Contains(".Designer.", StringComparison.OrdinalIgnoreCase))
+                    .ThenBy(source => source.OriginalPath, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
+
+    private static PdbSourceInfo? ResolveFallbackSource(
+        string typeName,
+        IReadOnlyList<PdbSourceInfo> pdbSources,
+        IReadOnlyDictionary<string, List<PdbSourceInfo>> sourceByTypeName)
+    {
+        var simpleName = typeName[(typeName.LastIndexOf('.') + 1)..];
+        if (sourceByTypeName.TryGetValue(simpleName, out var exactMatches))
+            return exactMatches.FirstOrDefault();
+
+        return pdbSources
+            .AsValueEnumerable()
+            .Where(source => !source.IsGenerated)
+            .OrderBy(source => LevenshteinDistance(simpleName, Path.GetFileNameWithoutExtension(source.OriginalPath)))
+            .ThenBy(source => source.OriginalPath, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    private static int LevenshteinDistance(string left, string right)
+    {
+        if (left.Length == 0)
+            return right.Length;
+        if (right.Length == 0)
+            return left.Length;
+
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var i = 0; i <= right.Length; i++)
+            previous[i] = i;
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            current[0] = i + 1;
+            for (var j = 0; j < right.Length; j++)
+            {
+                var cost = char.ToUpperInvariant(left[i]) == char.ToUpperInvariant(right[j]) ? 0 : 1;
+                current[j + 1] = Math.Min(
+                    Math.Min(current[j] + 1, previous[j + 1] + 1),
+                    previous[j] + cost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static void RemoveNonPreferredNestedTypeMethods(
@@ -180,16 +282,14 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
     private static Dictionary<string, List<SourceFileMethodEntry>> BuildDocumentMethodMap(
         MetadataReader mdReader,
+        string assemblyPath,
         string pdbPath,
         Dictionary<TypeDefinitionHandle, string> typeNames,
         IReadOnlyDictionary<int, IReadOnlyList<LocalVariableDebugInfo>> methodLocalVariables)
     {
         var result = new Dictionary<string, List<SourceFileMethodEntry>>(StringComparer.OrdinalIgnoreCase);
         var generatedMethodOwners = BuildGeneratedMethodOwnerMap(mdReader, typeNames, methodLocalVariables);
-
-        using var pdbFs = File.OpenRead(pdbPath);
-        using var pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbFs);
-        var pdbReader = pdbProvider.GetMetadataReader();
+        var methodDocuments = PdbReader.ReadMethodDocumentPaths(assemblyPath, pdbPath);
 
         foreach (var typeHandle in mdReader.TypeDefinitions)
         {
@@ -201,22 +301,9 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             foreach (var methodHandle in typeDef.GetMethods())
             {
                 var rowNumber = MetadataTokens.GetRowNumber(methodHandle);
-                var debugHandle = MetadataTokens.MethodDebugInformationHandle(rowNumber);
-
-                MethodDebugInformation debugInfo;
-                try
-                {
-                    debugInfo = pdbReader.GetMethodDebugInformation(debugHandle);
-                }
-                catch
-                {
+                if (!methodDocuments.TryGetValue(rowNumber, out var docPath))
                     continue;
-                }
 
-                if (debugInfo.Document.IsNil) continue;
-
-                var doc = pdbReader.GetDocument(debugInfo.Document);
-                var docPath = pdbReader.GetString(doc.Name);
                 if (string.IsNullOrWhiteSpace(docPath)) continue;
 
                 var normalized = NormalizePath(docPath);
@@ -246,26 +333,15 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
         IReadOnlyDictionary<string, HashSet<string>> typeDocuments)
     {
         var result = new Dictionary<string, List<SourceFileTypeDeclarationEntry>>(StringComparer.OrdinalIgnoreCase);
+        var typeDefinitionDocuments = PdbReader.ReadTypeDefinitionDocumentPaths(pdbPath);
 
-        using var pdbFs = File.OpenRead(pdbPath);
-        using var pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbFs);
-        var pdbReader = pdbProvider.GetMetadataReader();
-
-        foreach (var customDebugHandle in pdbReader.CustomDebugInformation)
+        foreach (var pair in typeDefinitionDocuments)
         {
-            var customDebugInfo = pdbReader.GetCustomDebugInformation(customDebugHandle);
-            if (customDebugInfo.Parent.Kind != HandleKind.TypeDefinition || customDebugInfo.Kind.IsNil ||
-                customDebugInfo.Value.IsNil)
-                continue;
-
-            if (pdbReader.GetGuid(customDebugInfo.Kind) != TypeDefinitionDocumentKind)
-                continue;
-
-            var typeHandle = (TypeDefinitionHandle)customDebugInfo.Parent;
+            var typeHandle = MetadataTokens.TypeDefinitionHandle(pair.Key);
             if (!typeNames.TryGetValue(typeHandle, out var typeName) || IsCompilerGenerated(typeName))
                 continue;
 
-            var ownerDocuments = ReadTypeDefinitionDocuments(pdbReader, customDebugInfo.Value)
+            var ownerDocuments = pair.Value
                 .Where(sourceByNormalizedPath.ContainsKey)
                 .OrderBy(document => sourceByNormalizedPath[document].IsGenerated)
                 .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
@@ -660,29 +736,6 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     }
 
 
-    private static List<string> ReadTypeDefinitionDocuments(MetadataReader reader, BlobHandle value)
-    {
-        var documents = new List<string>();
-        var blobReader = reader.GetBlobReader(value);
-        while (blobReader.RemainingBytes > 0)
-        {
-            var documentRowId = blobReader.ReadCompressedInteger();
-            if (documentRowId <= 0)
-                continue;
-
-            var documentHandle = MetadataTokens.DocumentHandle(documentRowId);
-            if (documentHandle.IsNil)
-                continue;
-
-            var documentPath = reader.GetString(reader.GetDocument(documentHandle).Name);
-            if (!string.IsNullOrWhiteSpace(documentPath))
-                documents.Add(NormalizePath(documentPath));
-        }
-
-        return documents;
-    }
-
-
     private static Dictionary<string, SourceFileMethodEntry> BuildGeneratedMethodOwnerMap(
         MetadataReader reader,
         Dictionary<TypeDefinitionHandle, string> typeNames,
@@ -756,6 +809,20 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor).Parent),
             _ => null
         };
+
+    private static bool IsEmbeddedInteropType(MetadataReader reader, TypeDefinitionHandle typeHandle)
+    {
+        var typeDefinition = reader.GetTypeDefinition(typeHandle);
+        return typeDefinition.Attributes.HasFlag(TypeAttributes.Import)
+            || typeDefinition.GetCustomAttributes()
+                .AsValueEnumerable()
+                .Select(handle => GetCustomAttributeTypeFullName(reader, reader.GetCustomAttribute(handle)))
+                .Any(attributeName => attributeName is
+                    "System.Runtime.InteropServices.TypeIdentifierAttribute" or
+                    "System.Runtime.InteropServices.ComImportAttribute" or
+                    "System.Runtime.InteropServices.ImportedFromTypeLibAttribute" or
+                    "System.Runtime.InteropServices.PrimaryInteropAssemblyAttribute");
+    }
 
     private static string? GetTypeFullName(MetadataReader reader, EntityHandle handle) =>
         handle.Kind switch
