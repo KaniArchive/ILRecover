@@ -32,6 +32,7 @@ public static class Parser
             Log.Info($"{target.Name}");
 
             var outputDir = Path.Combine(output, target.Name);
+            var enablePdbMethodRemapping = remapOptions.IsEnabledFor(target.Name);
 
             if (Directory.Exists(outputDir))
             {
@@ -43,7 +44,7 @@ public static class Parser
             var analyzer = new AssemblyAnalyzer(
                 target.AssemblyPath,
                 target.PdbPath,
-                remapOptions.IsEnabledFor(target.Name));
+                enablePdbMethodRemapping);
             var result = analyzer.Analyze();
             Log.Success($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
 
@@ -68,7 +69,8 @@ public static class Parser
                 csVersionStr,
                 dotnet,
                 dependencyDirs,
-                target.PdbPath);
+                target.PdbPath,
+                enablePdbMethodRemapping);
             phase.Run();
 
             Log.Success($"Done: {outputDir}");

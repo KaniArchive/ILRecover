@@ -11,6 +11,12 @@ public static class PdbMethodMapper
     private const int MaxShift = 40000;
     private const int CandidateWindow = 8;
 
+    public static PdbMethodDebugMap Build(string assemblyPath, string pdbPath)
+    {
+        using var file = new PEFile(assemblyPath);
+        return Build(assemblyPath, pdbPath, BuildTypeNameLookup(file.Metadata));
+    }
+
     public static PdbMethodDebugMap Build(
         string assemblyPath,
         string pdbPath,
@@ -77,6 +83,29 @@ public static class PdbMethodMapper
         }
 
         return result;
+    }
+
+    private static Dictionary<TypeDefinitionHandle, string> BuildTypeNameLookup(MetadataReader reader)
+    {
+        var result = new Dictionary<TypeDefinitionHandle, string>();
+
+        foreach (var handle in reader.TypeDefinitions)
+            result[handle] = BuildFullName(reader, handle);
+
+        return result;
+    }
+
+    private static string BuildFullName(MetadataReader reader, TypeDefinitionHandle handle)
+    {
+        var typeDef = reader.GetTypeDefinition(handle);
+        var name = reader.GetString(typeDef.Name);
+
+        var declaringHandle = typeDef.GetDeclaringType();
+        if (!declaringHandle.IsNil)
+            return BuildFullName(reader, declaringHandle) + "+" + name;
+
+        var ns = reader.GetString(typeDef.Namespace);
+        return string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
     }
 
     private static Dictionary<string, List<int>> BuildMethodRowsBySimpleTypeName(

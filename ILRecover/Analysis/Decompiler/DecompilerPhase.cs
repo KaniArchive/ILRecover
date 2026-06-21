@@ -22,7 +22,8 @@ public partial class DecompilerPhase(
     string? csVersion = null,
     string? dotnetVersion = null,
     IReadOnlyList<string>? dependencySearchDirs = null,
-    string? pdbPath = null)
+    string? pdbPath = null,
+    bool enablePdbMethodRemapping = false)
 {
     private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
 
@@ -343,7 +344,12 @@ public partial class DecompilerPhase(
 
         try
         {
-            return DebugInfoUtils.FromFile(new PEFile(dllPath), pdbPath);
+            var debugInfoProvider = DebugInfoUtils.FromFile(new PEFile(dllPath), pdbPath);
+            if (debugInfoProvider is null || !enablePdbMethodRemapping)
+                return debugInfoProvider;
+
+            var methodDebugMap = PdbMethodMapper.Build(dllPath, pdbPath);
+            return new RemappedDebugInfoProvider(debugInfoProvider, methodDebugMap);
         }
         catch
         {
