@@ -8,7 +8,7 @@ using ZLinq;
 
 namespace ILRecover.Analysis;
 
-public class AssemblyAnalyzer(string dllPath, string pdbPath)
+public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMethodRemapping = false)
 {
     private static readonly HashSet<string> StateMachineAttributeNames =
     [
@@ -22,14 +22,17 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     public AnalysisResult Analyze()
     {
         var pdbSources = PdbReader.ReadSourceFiles(pdbPath);
-        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(dllPath, pdbPath);
         var commonSourceRoot = FindCommonSourceRoot(pdbSources.Select(source => source.OriginalPath));
 
         var file = new PEFile(dllPath);
         var mdReader = file.Metadata;
 
         var typeNames = BuildTypeNameLookup(mdReader);
-        var docToMethods = BuildDocumentMethodMap(mdReader, dllPath, pdbPath, typeNames, methodLocalVariables);
+        var methodDebugMap = enablePdbMethodRemapping
+            ? PdbMethodMapper.Build(dllPath, pdbPath, typeNames)
+            : PdbMethodDebugMap.Identity(PdbReader.ReadMethodDocumentPaths(dllPath, pdbPath));
+        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(dllPath, pdbPath, methodDebugMap);
+        var docToMethods = BuildDocumentMethodMap(mdReader, typeNames, methodLocalVariables, methodDebugMap);
         if (docToMethods.Count == 0)
             return BuildFallbackAnalysis(mdReader, typeNames, pdbSources, commonSourceRoot);
 
@@ -113,7 +116,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             var relativePath = source is null
                 ? $"{typeName}.cs"
                 : ToRelativePath(source.OriginalPath, commonSourceRoot);
-            mapped.Add(new SourceFileMap(originalPath, relativePath, source?.IsGenerated ?? false, [], declaredTypeFullNames,
+            mapped.Add(new SourceFileMap(originalPath, relativePath, source?.IsGenerated ?? false, [],
+                declaredTypeFullNames,
                 [], true));
         }
 
@@ -253,7 +257,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 methodsByDocument[document] = methods;
             }
 
-            if (!methods.Any(existing => existing.MethodHandle == method.MethodHandle))
+            if (methods.All(existing => existing.MethodHandle != method.MethodHandle))
                 methods.Add(method);
         }
     }
@@ -282,14 +286,12 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
 
     private static Dictionary<string, List<SourceFileMethodEntry>> BuildDocumentMethodMap(
         MetadataReader mdReader,
-        string assemblyPath,
-        string pdbPath,
         Dictionary<TypeDefinitionHandle, string> typeNames,
-        IReadOnlyDictionary<int, IReadOnlyList<LocalVariableDebugInfo>> methodLocalVariables)
+        IReadOnlyDictionary<int, IReadOnlyList<LocalVariableDebugInfo>> methodLocalVariables,
+        PdbMethodDebugMap methodDebugMap)
     {
         var result = new Dictionary<string, List<SourceFileMethodEntry>>(StringComparer.OrdinalIgnoreCase);
         var generatedMethodOwners = BuildGeneratedMethodOwnerMap(mdReader, typeNames, methodLocalVariables);
-        var methodDocuments = PdbReader.ReadMethodDocumentPaths(assemblyPath, pdbPath);
 
         foreach (var typeHandle in mdReader.TypeDefinitions)
         {
@@ -301,7 +303,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
             foreach (var methodHandle in typeDef.GetMethods())
             {
                 var rowNumber = MetadataTokens.GetRowNumber(methodHandle);
-                if (!methodDocuments.TryGetValue(rowNumber, out var docPath))
+                if (!methodDebugMap.DocumentPathsByMethodRow.TryGetValue(rowNumber, out var docPath))
                     continue;
 
                 if (string.IsNullOrWhiteSpace(docPath)) continue;
@@ -440,7 +442,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
                 declarationsByDocument[document] = declarations;
             }
 
-            if (!declarations.Any(existing => existing.TypeHandle == declaration.TypeHandle))
+            if (declarations.All(existing => existing.TypeHandle != declaration.TypeHandle))
                 declarations.Add(declaration);
         }
     }
@@ -814,14 +816,14 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath)
     {
         var typeDefinition = reader.GetTypeDefinition(typeHandle);
         return typeDefinition.Attributes.HasFlag(TypeAttributes.Import)
-            || typeDefinition.GetCustomAttributes()
-                .AsValueEnumerable()
-                .Select(handle => GetCustomAttributeTypeFullName(reader, reader.GetCustomAttribute(handle)))
-                .Any(attributeName => attributeName is
-                    "System.Runtime.InteropServices.TypeIdentifierAttribute" or
-                    "System.Runtime.InteropServices.ComImportAttribute" or
-                    "System.Runtime.InteropServices.ImportedFromTypeLibAttribute" or
-                    "System.Runtime.InteropServices.PrimaryInteropAssemblyAttribute");
+               || typeDefinition.GetCustomAttributes()
+                   .AsValueEnumerable()
+                   .Select(handle => GetCustomAttributeTypeFullName(reader, reader.GetCustomAttribute(handle)))
+                   .Any(attributeName => attributeName is
+                       "System.Runtime.InteropServices.TypeIdentifierAttribute" or
+                       "System.Runtime.InteropServices.ComImportAttribute" or
+                       "System.Runtime.InteropServices.ImportedFromTypeLibAttribute" or
+                       "System.Runtime.InteropServices.PrimaryInteropAssemblyAttribute");
     }
 
     private static string? GetTypeFullName(MetadataReader reader, EntityHandle handle) =>

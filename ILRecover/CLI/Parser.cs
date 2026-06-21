@@ -3,6 +3,7 @@ using ICSharpCode.Decompiler.Metadata;
 using ILRecover.Analysis;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
+using ILRecover.Pdb;
 using System.Reflection.PortableExecutable;
 using ZLinq;
 
@@ -16,10 +17,12 @@ public static class Parser
         int csVersion,
         string[]? dependencies,
         string? solution,
-        string? dotnet)
+        string? dotnet,
+        string[]? shift)
     {
         var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
         IReadOnlyList<string> dependencyDirs = dependencies ?? [];
+        var remapOptions = new PdbMethodRemapOptions(shift ?? []);
 
         var targets = ValidateAndResolveTargets(input);
         var projectPaths = new List<string>();
@@ -37,7 +40,10 @@ public static class Parser
             }
 
             Log.Info("Analyzing...");
-            var analyzer = new AssemblyAnalyzer(target.AssemblyPath, target.PdbPath);
+            var analyzer = new AssemblyAnalyzer(
+                target.AssemblyPath,
+                target.PdbPath,
+                remapOptions.IsEnabledFor(target.Name));
             var result = analyzer.Analyze();
             Log.Success($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
 

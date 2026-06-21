@@ -1,7 +1,6 @@
 using ICSharpCode.Decompiler.CSharp.Syntax;
 using ILRecover.Models;
 using ZLinq;
-
 using CSharpAttribute = ICSharpCode.Decompiler.CSharp.Syntax.Attribute;
 
 namespace ILRecover.Analysis.SourceGen;
@@ -22,9 +21,9 @@ internal static partial class SourceGenNormalizer
             RemoveDefaultMemoryPackGenerateTypeArguments(type);
             RemoveBaseTypes(type, "IMemoryPackable", "IMemoryPackFormatterRegister");
 
-            foreach (var nestedType in type.Members.OfType<TypeDeclaration>().ToList())
-                if (nestedType.BaseTypes.Any(baseType => AstTypeContains(baseType, "MemoryPackFormatter")))
-                    nestedType.Remove();
+            foreach (var nestedType in type.Members.AsValueEnumerable().OfType<TypeDeclaration>().ToList().Where(nestedType =>
+                         nestedType.BaseTypes.Any(baseType => AstTypeContains(baseType, "MemoryPackFormatter"))))
+                nestedType.Remove();
         }
     }
 
@@ -55,9 +54,12 @@ internal static partial class SourceGenNormalizer
 
     private static bool IsDefaultMemoryPackGenerateTypeArgument(Expression argument) =>
         IsGenerateTypeObject(argument)
-        || argument is AssignmentExpression { Operator: AssignmentOperatorType.Assign, Left: var left, Right: var right }
+        || (argument is AssignmentExpression
+            {
+                Operator: AssignmentOperatorType.Assign, Left: var left, Right: var right
+            }
             && IsMemoryPackGenerateTypeParameter(left)
-            && IsGenerateTypeObject(right);
+            && IsGenerateTypeObject(right));
 
     private static bool IsMemoryPackGenerateTypeParameter(Expression expression) =>
         expression is IdentifierExpression { Identifier: "GenerateType" or "GenerateType_" or "generateType" };
@@ -68,7 +70,7 @@ internal static partial class SourceGenNormalizer
 
     private static bool IsGenerateTypeReference(Expression expression) =>
         expression is IdentifierExpression { Identifier: "GenerateType" }
-        || expression is TypeReferenceExpression { Type: var type } && AstTypeContains(type, "GenerateType")
+        || (expression is TypeReferenceExpression { Type: var type } && AstTypeContains(type, "GenerateType"))
         || expression is MemberReferenceExpression { MemberName: "GenerateType" };
 
     private static void RemoveBaseTypes(TypeDeclaration type, params string[] typeNames)

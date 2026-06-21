@@ -62,7 +62,8 @@ public static class PdbReader
 
     public static Dictionary<int, IReadOnlyList<LocalVariableDebugInfo>> ReadMethodLocalVariables(
         string assemblyPath,
-        string pdbPath)
+        string pdbPath,
+        PdbMethodDebugMap? methodDebugMap = null)
     {
         using var file = new PEFile(assemblyPath);
         var debugInfo = DebugInfoUtils.FromFile(file, pdbPath);
@@ -74,14 +75,17 @@ public static class PdbReader
             var result = new Dictionary<int, IReadOnlyList<LocalVariableDebugInfo>>();
             foreach (var methodHandle in file.Metadata.MethodDefinitions)
             {
-                var variables = debugInfo.GetVariables(methodHandle)
+                var methodRow = MetadataTokens.GetRowNumber(methodHandle);
+                var pdbMethodRow = methodDebugMap?.GetPdbRow(methodRow) ?? methodRow;
+                var pdbMethodHandle = MetadataTokens.MethodDefinitionHandle(pdbMethodRow);
+                var variables = debugInfo.GetVariables(pdbMethodHandle)
                     .AsValueEnumerable()
                     .Where(variable => !string.IsNullOrWhiteSpace(variable.Name) && !IsGeneratedLocal(variable.Name))
                     .Select(variable => new LocalVariableDebugInfo(variable.Index, variable.Name, 0, 0))
                     .ToList();
 
                 if (variables.Count > 0)
-                    result[MetadataTokens.GetRowNumber(methodHandle)] = variables;
+                    result[methodRow] = variables;
             }
 
             return result;

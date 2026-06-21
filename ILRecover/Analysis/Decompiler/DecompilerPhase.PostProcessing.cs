@@ -31,13 +31,10 @@ public partial class DecompilerPhase
     [GeneratedRegex(@"<Main>\$", RegexOptions.Multiline)]
     private static partial Regex GeneratedMainMethodNameRegex();
 
-    [GeneratedRegex(
-        @"\}(\r?\n)(?=(\[|public\b|internal\b|protected\b|private\b|sealed\b|abstract\b|static\b|partial\b|class\b|struct\b|interface\b|enum\b|record\b))")]
+    [GeneratedRegex(@"\}(\r?\n)(?=(\[|public\b|internal\b|protected\b|private\b|sealed\b|abstract\b|static\b|partial\b|class\b|struct\b|interface\b|enum\b|record\b))")]
     private static partial Regex ModifierRegex();
 
-    [GeneratedRegex(
-        @"^\s*\[(assembly|module)\s*:\s*((global::)?System\.Runtime\.CompilerServices\.)?(CompilerGenerated(Attribute)?|Nullable(Attribute|ContextAttribute|PublicOnlyAttribute)|RefSafetyRulesAttribute|EmbeddedAttribute)(\([^\]]*\))?\]\s*\r?\n|^\s*\[((global::)?System\.Runtime\.CompilerServices\.)?(CompilerGenerated(Attribute)?|Nullable(Attribute|ContextAttribute|PublicOnlyAttribute)|RefSafetyRulesAttribute|EmbeddedAttribute)(\([^\]]*\))?\]\s*\r?\n",
-        RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\s*\[(assembly|module)\s*:\s*((global::)?System\.Runtime\.CompilerServices\.)?(CompilerGenerated(Attribute)?|Nullable(Attribute|ContextAttribute|PublicOnlyAttribute)|RefSafetyRulesAttribute|EmbeddedAttribute)(\([^\]]*\))?\]\s*\r?\n|^\s*\[((global::)?System\.Runtime\.CompilerServices\.)?(CompilerGenerated(Attribute)?|Nullable(Attribute|ContextAttribute|PublicOnlyAttribute)|RefSafetyRulesAttribute|EmbeddedAttribute)(\([^\]]*\))?\]\s*\r?\n", RegexOptions.Multiline)]
     private static partial Regex NoiseAttributeRegex();
 
     [GeneratedRegex(@"\(\([^)]+\)\(ref\s+([^\)]+)\)\)\.([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.Multiline)]
