@@ -12,6 +12,8 @@ public static class Args
     /// <param name="solution">-sl, Name of the solution.</param>
     /// <param name="dotnet">-dn, Target .NET framework (e.g. net9.0).</param>
     /// <param name="shift">-sh, Assembly name patterns that enable shifted PDB method-row recovery.</param>
+    /// <param name="classOwnFile">-cf, Keep only classes that are owned by the mapped source file name.</param>
+    /// <param name="allowUnmapped">-au, Emit rejected class ownership matches under Unmapped for manual recovery.</param>
     public static void Run(
         string input,
         string output,
@@ -19,6 +21,8 @@ public static class Args
         string? solution = null,
         string? dotnet = null,
         string[]? shift = null,
+        bool classOwnFile = false,
+        bool allowUnmapped = false,
         params string[]? dependencies) =>
-        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift);
+        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift, classOwnFile, allowUnmapped);
 }

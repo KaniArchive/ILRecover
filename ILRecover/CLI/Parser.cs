@@ -18,7 +18,9 @@ public static class Parser
         string[]? dependencies,
         string? solution,
         string? dotnet,
-        string[]? shift)
+        string[]? shift,
+        bool classOwnFile,
+        bool allowUnmapped)
     {
         var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
         IReadOnlyList<string> dependencyDirs = dependencies ?? [];
@@ -46,7 +48,18 @@ public static class Parser
                 target.PdbPath,
                 enablePdbMethodRemapping);
             var result = analyzer.Analyze();
-            Log.Success($"Mapped: {result.Mapped.Count} Skipped: {result.Skipped.Count}");
+            var mapped = result.Mapped;
+            if (classOwnFile)
+            {
+                var ownershipResult = SourceFileOwnershipFilter.Apply(mapped, allowUnmapped);
+                mapped = ownershipResult.Mapped;
+                Log.Success(
+                    $"Mapped: {mapped.Count} Skipped: {result.Skipped.Count} Rejected: {ownershipResult.RejectedTypeCount} Unmapped: {ownershipResult.UnmappedTypeCount}");
+            }
+            else
+            {
+                Log.Success($"Mapped: {mapped.Count} Skipped: {result.Skipped.Count}");
+            }
 
             Log.Info("Writing csproj...");
             var builder = new RecoveredProjectFileBuilder(
@@ -64,7 +77,7 @@ public static class Parser
             Log.Info("Decompiling...");
             var phase = new DecompilerPhase(
                 target.AssemblyPath,
-                result.Mapped,
+                mapped,
                 outputDir,
                 csVersionStr,
                 dotnet,
