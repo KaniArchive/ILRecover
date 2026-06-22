@@ -90,7 +90,12 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
             .Select(source => source.OriginalPath)
             .ToList());
 
-        return new AnalysisResult(mapped, skipped, pdbSources, GetUserTypeNames(typeNames.Values));
+        return new AnalysisResult(
+            mapped,
+            skipped,
+            pdbSources,
+            GetUserTypeNames(typeNames.Values),
+            skipped.Select(path => ToRelativePath(path, commonSourceRoot)).ToList());
     }
 
     private AnalysisResult BuildFallbackAnalysis(
@@ -131,7 +136,12 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
             .Select(source => source.OriginalPath)
             .ToList();
 
-        return new AnalysisResult(mapped, skipped, pdbSources, GetUserTypeNames(typeNames.Values));
+        return new AnalysisResult(
+            mapped,
+            skipped,
+            pdbSources,
+            GetUserTypeNames(typeNames.Values),
+            skipped.Select(path => ToRelativePath(path, commonSourceRoot)).ToList());
     }
 
     private static IReadOnlyList<string> GetUserTypeNames(IEnumerable<string> typeNames) =>

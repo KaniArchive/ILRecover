@@ -54,7 +54,7 @@ public static class Parser
                 var ownershipResult = SourceFileOwnershipFilter.Apply(
                     mapped,
                     allowUnmapped,
-                    result.Skipped,
+                    result.SkippedRelativePaths,
                     result.TypeFullNames);
                 mapped = ownershipResult.Mapped;
                 Log.Success(
