@@ -51,7 +51,11 @@ public static class Parser
             var mapped = result.Mapped;
             if (classOwnFile)
             {
-                var ownershipResult = SourceFileOwnershipFilter.Apply(mapped, allowUnmapped);
+                var ownershipResult = SourceFileOwnershipFilter.Apply(
+                    mapped,
+                    allowUnmapped,
+                    result.Skipped,
+                    result.TypeFullNames);
                 mapped = ownershipResult.Mapped;
                 Log.Success(
                     $"Mapped: {mapped.Count} Skipped: {result.Skipped.Count} Rejected: {ownershipResult.RejectedTypeCount} Unmapped: {ownershipResult.UnmappedTypeCount}");

@@ -90,7 +90,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
             .Select(source => source.OriginalPath)
             .ToList());
 
-        return new AnalysisResult(mapped, skipped, pdbSources);
+        return new AnalysisResult(mapped, skipped, pdbSources, GetUserTypeNames(typeNames.Values));
     }
 
     private AnalysisResult BuildFallbackAnalysis(
@@ -131,8 +131,15 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
             .Select(source => source.OriginalPath)
             .ToList();
 
-        return new AnalysisResult(mapped, skipped, pdbSources);
+        return new AnalysisResult(mapped, skipped, pdbSources, GetUserTypeNames(typeNames.Values));
     }
+
+    private static IReadOnlyList<string> GetUserTypeNames(IEnumerable<string> typeNames) =>
+        typeNames
+            .AsValueEnumerable()
+            .Where(typeName => !IsCompilerGenerated(typeName) && !IsNestedType(typeName))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
     private static IReadOnlyDictionary<string, List<PdbSourceInfo>> BuildFallbackSourceLookup(
         IReadOnlyList<PdbSourceInfo> pdbSources) =>

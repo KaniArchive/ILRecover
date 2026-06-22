@@ -12,7 +12,9 @@ public static class SourceFileOwnershipFilter
 {
     public static SourceFileOwnershipFilterResult Apply(
         IReadOnlyList<SourceFileMap> sourceFiles,
-        bool allowUnmapped)
+        bool allowUnmapped,
+        IReadOnlyList<string>? skippedPaths = null,
+        IReadOnlyList<string>? typeFullNames = null)
     {
         var mapped = new List<SourceFileMap>();
         var keptRoots = new HashSet<string>(StringComparer.Ordinal);
@@ -52,9 +54,61 @@ public static class SourceFileOwnershipFilter
             .ToList();
 
         if (allowUnmapped)
-            mapped.AddRange(unmappedRoots.Select(CreateUnmappedFile));
+            unmappedRoots.AddRange(FindSkippedUnmappedRoots(skippedPaths ?? [], typeFullNames ?? [], keptRoots,
+                rejectedRoots));
 
-        return new SourceFileOwnershipFilterResult(mapped, rejectedRoots.Count, allowUnmapped ? unmappedRoots.Count : 0);
+        if (allowUnmapped)
+            mapped.AddRange(unmappedRoots
+                .AsValueEnumerable()
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(root => root, StringComparer.Ordinal)
+                .Select(CreateUnmappedFile)
+                .ToList());
+
+        return new SourceFileOwnershipFilterResult(
+            mapped,
+            rejectedRoots.Count,
+            allowUnmapped ? unmappedRoots.Distinct(StringComparer.Ordinal).Count() : 0);
+    }
+
+    private static List<string> FindSkippedUnmappedRoots(
+        IReadOnlyList<string> skippedPaths,
+        IReadOnlyList<string> typeFullNames,
+        IReadOnlySet<string> keptRoots,
+        IReadOnlySet<string> rejectedRoots)
+    {
+        if (skippedPaths.Count == 0 || typeFullNames.Count == 0)
+            return [];
+
+        var rootsBySimpleName = typeFullNames
+            .AsValueEnumerable()
+            .Where(typeName => !IsCompilerGenerated(typeName))
+            .Select(GetRootTypeName)
+            .Distinct(StringComparer.Ordinal)
+            .GroupBy(GetSimpleTypeName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var result = new List<string>();
+        foreach (var skippedPath in skippedPaths)
+        {
+            var stem = Path.GetFileNameWithoutExtension(skippedPath);
+            if (string.IsNullOrWhiteSpace(stem))
+                continue;
+
+            if (!rootsBySimpleName.TryGetValue(GetPrimaryStem(stem), out var candidates) &&
+                !rootsBySimpleName.TryGetValue(stem, out candidates))
+                continue;
+
+            var usableCandidates = candidates
+                .AsValueEnumerable()
+                .Where(root => !keptRoots.Contains(root) && !rejectedRoots.Contains(root))
+                .ToList();
+
+            if (usableCandidates.Count == 1)
+                result.Add(usableCandidates[0]);
+        }
+
+        return result;
     }
 
     private static List<string> GetRootTypeNames(SourceFileMap sourceFile) =>
