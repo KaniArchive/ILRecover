@@ -130,7 +130,7 @@ public static class SourceFileOwnershipFilter
     private static SourceFileMap CreateRescuedSkippedFile(string relativePath, string rootTypeName) =>
         new(
             relativePath,
-            relativePath,
+            Path.Combine("Unmapped", relativePath),
             false,
             [],
             [rootTypeName],
