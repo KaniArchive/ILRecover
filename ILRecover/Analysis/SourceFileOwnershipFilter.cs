@@ -1,5 +1,7 @@
 using ILRecover.Models;
 using ZLinq;
+using ILRecover.Helpers;
+using static ILRecover.Helpers.TypeNameHelper;
 
 namespace ILRecover.Analysis;
 
@@ -53,15 +55,27 @@ public static class SourceFileOwnershipFilter
             .OrderBy(root => root, StringComparer.Ordinal)
             .ToList();
 
+        var remappedRejectedFiles = allowUnmapped
+            ? FindRejectedDocumentMatches(sourceFiles, skippedPaths ?? [], unmappedRoots)
+            : [];
+
+        var remappedRejectedRoots = remappedRejectedFiles
+            .AsValueEnumerable()
+            .SelectMany(file => file.TypeFullNames)
+            .ToHashSet(StringComparer.Ordinal);
+
         var rescuedSkippedFiles = allowUnmapped
-            ? FindSkippedRescueFiles(skippedPaths ?? [], typeFullNames ?? [], keptRoots, rejectedRoots)
+            ? FindSkippedRescueFiles(skippedPaths ?? [], typeFullNames ?? [], keptRoots, rejectedRoots,
+                remappedRejectedRoots)
             : [];
 
         if (allowUnmapped)
         {
+            mapped.AddRange(remappedRejectedFiles);
             mapped.AddRange(rescuedSkippedFiles);
             mapped.AddRange(unmappedRoots
                 .AsValueEnumerable()
+                .Where(root => !remappedRejectedRoots.Contains(root))
                 .Where(root => rescuedSkippedFiles
                     .AsValueEnumerable()
                     .All(file => !file.TypeFullNames.Contains(root, StringComparer.Ordinal)))
@@ -76,6 +90,7 @@ public static class SourceFileOwnershipFilter
             rejectedRoots.Count,
             allowUnmapped
                 ? rescuedSkippedFiles.Count + unmappedRoots
+                    .Where(root => !remappedRejectedRoots.Contains(root))
                     .Where(root => rescuedSkippedFiles
                         .AsValueEnumerable()
                         .All(file => !file.TypeFullNames.Contains(root, StringComparer.Ordinal)))
@@ -88,7 +103,8 @@ public static class SourceFileOwnershipFilter
         IReadOnlyList<string> skippedPaths,
         IReadOnlyList<string> typeFullNames,
         IReadOnlySet<string> keptRoots,
-        IReadOnlySet<string> rejectedRoots)
+        IReadOnlySet<string> rejectedRoots,
+        IReadOnlySet<string> remappedRejectedRoots)
     {
         if (skippedPaths.Count == 0 || typeFullNames.Count == 0)
             return [];
@@ -96,26 +112,28 @@ public static class SourceFileOwnershipFilter
         var rootsBySimpleName = typeFullNames
             .AsValueEnumerable()
             .Where(typeName => !IsCompilerGenerated(typeName))
-            .Select(GetRootTypeName)
+            .Select(GetRoot)
             .Distinct(StringComparer.Ordinal)
-            .GroupBy(GetSimpleTypeName, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(GetSimple, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
 
         var result = new List<SourceFileMap>();
         var rescuedRoots = new HashSet<string>(StringComparer.Ordinal);
         foreach (var skippedPath in skippedPaths)
         {
-            var stem = Path.GetFileNameWithoutExtension(skippedPath);
+            var stem = skippedPath.GetFileStem();
             if (string.IsNullOrWhiteSpace(stem))
                 continue;
 
-            if (!rootsBySimpleName.TryGetValue(GetPrimaryStem(stem), out var candidates) &&
+            if (!rootsBySimpleName.TryGetValue(skippedPath.GetPrimaryFileStem(), out var candidates) &&
                 !rootsBySimpleName.TryGetValue(stem, out candidates))
                 continue;
 
             var usableCandidates = candidates
                 .AsValueEnumerable()
-                .Where(root => !keptRoots.Contains(root) && !rejectedRoots.Contains(root))
+                .Where(root => !keptRoots.Contains(root)
+                               && !rejectedRoots.Contains(root)
+                               && !remappedRejectedRoots.Contains(root))
                 .ToList();
 
             if (usableCandidates.Count != 1 || !rescuedRoots.Add(usableCandidates[0]))
@@ -126,6 +144,95 @@ public static class SourceFileOwnershipFilter
 
         return result;
     }
+
+    private static List<SourceFileMap> FindRejectedDocumentMatches(
+        IReadOnlyList<SourceFileMap> sourceFiles,
+        IReadOnlyList<string> skippedPaths,
+        IReadOnlyList<string> rejectedRoots)
+    {
+        if (rejectedRoots.Count == 0)
+            return [];
+
+        var usedPaths = sourceFiles
+            .AsValueEnumerable()
+            .Where(HasContent)
+            .Select(file => file.RelativePath.NormalizePath())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var availableDocuments = sourceFiles
+            .AsValueEnumerable()
+            .Select(file => file.RelativePath)
+            .Concat(skippedPaths)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !usedPaths.Contains(path.NormalizePath()))
+            .ToList();
+
+        var result = new List<SourceFileMap>();
+        var claimedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in rejectedRoots.GroupBy(GetSimple, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var match in FindMatchingDocuments(group.ToList(), availableDocuments, claimedPaths))
+            {
+                claimedPaths.Add(match.RelativePath);
+                result.Add(CreateMatchedDocumentFile(match.RelativePath, match.RootTypeName));
+            }
+        }
+
+        return result;
+    }
+
+    private static List<(string RelativePath, string RootTypeName)> FindMatchingDocuments(
+        IReadOnlyList<string> rootTypeNames,
+        IReadOnlyList<string> availableDocuments,
+        IReadOnlySet<string> claimedPaths)
+    {
+        var simpleName = GetSimple(rootTypeNames[0]);
+        var candidateDocuments = availableDocuments
+            .AsValueEnumerable()
+            .Where(path => !claimedPaths.Contains(path)
+                           && NameEquals(path.GetFileStem(), simpleName))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (candidateDocuments.Count == 0)
+        {
+            candidateDocuments = availableDocuments
+                .AsValueEnumerable()
+                .Where(path => !claimedPaths.Contains(path)
+                               && NameEquals(path.GetPrimaryFileStem(), simpleName))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        if (rootTypeNames.Count == 1 && candidateDocuments.Count == 1)
+            return [(candidateDocuments[0], rootTypeNames[0])];
+
+        return rootTypeNames
+            .AsValueEnumerable()
+            .Select(root => (
+                RootTypeName: root,
+                Matches: candidateDocuments
+                    .AsValueEnumerable()
+                    .Where(path => NamespaceMatchesPath(root, path))
+                    .ToList()))
+            .Where(match => match.Matches.Count == 1)
+            .Select(match => (match.Matches[0], match.RootTypeName))
+            .GroupBy(match => match.Item1, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Single())
+            .ToList();
+    }
+
+    private static SourceFileMap CreateMatchedDocumentFile(string relativePath, string rootTypeName) =>
+        new(
+            relativePath,
+            relativePath,
+            false,
+            [],
+            [rootTypeName],
+            [],
+            true);
 
     private static SourceFileMap CreateRescuedSkippedFile(string relativePath, string rootTypeName) =>
         new(
@@ -141,7 +248,7 @@ public static class SourceFileOwnershipFilter
         sourceFile.TypeFullNames
             .AsValueEnumerable()
             .Where(typeName => !IsCompilerGenerated(typeName))
-            .Select(GetRootTypeName)
+            .Select(GetRoot)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -150,16 +257,16 @@ public static class SourceFileOwnershipFilter
         {
             Methods = sourceFile.Methods
                 .AsValueEnumerable()
-                .Where(method => ownedRoots.Contains(GetRootTypeName(method.TypeFullName)))
+                .Where(method => ownedRoots.Contains(GetRoot(method.TypeFullName)))
                 .ToList(),
             DeclaredTypeFullNames = sourceFile.TypeFullNames
                 .AsValueEnumerable()
-                .Where(typeName => ownedRoots.Contains(GetRootTypeName(typeName)))
+                .Where(typeName => ownedRoots.Contains(GetRoot(typeName)))
                 .Distinct(StringComparer.Ordinal)
                 .ToList(),
             TypeDeclarations = (sourceFile.TypeDeclarations ?? [])
                 .AsValueEnumerable()
-                .Where(typeDeclaration => ownedRoots.Contains(GetRootTypeName(typeDeclaration.TypeFullName)))
+                .Where(typeDeclaration => ownedRoots.Contains(GetRoot(typeDeclaration.TypeFullName)))
                 .ToList()
         };
 
@@ -174,9 +281,9 @@ public static class SourceFileOwnershipFilter
         string rootTypeName,
         IReadOnlyList<string> fileRoots)
     {
-        var simpleName = GetSimpleTypeName(rootTypeName);
-        var fullStem = Path.GetFileNameWithoutExtension(relativePath);
-        var primaryStem = GetPrimaryStem(fullStem);
+        var simpleName = GetSimple(rootTypeName);
+        var fullStem = relativePath.GetFileStem();
+        var primaryStem = relativePath.GetPrimaryFileStem();
 
         if (NameEquals(simpleName, fullStem) || NameEquals(simpleName, primaryStem))
             return true;
@@ -194,7 +301,7 @@ public static class SourceFileOwnershipFilter
         var firstToken = fileTokens[0];
         var matchingRootCount = fileRoots
             .AsValueEnumerable()
-            .Select(GetSimpleTypeName)
+            .Select(GetSimple)
             .Count(typeName => SplitNameTokens(typeName).FirstOrDefault() is { } token
                                && NameEquals(token, firstToken));
 
@@ -222,21 +329,15 @@ public static class SourceFileOwnershipFilter
         var namespaceName = GetNamespace(rootTypeName);
         if (!string.IsNullOrWhiteSpace(namespaceName))
             foreach (var part in namespaceName.Split('.', StringSplitOptions.RemoveEmptyEntries))
-                yield return SanitizePathPart(part);
+                yield return part.SanitizeFileNamePart();
 
-        yield return SanitizePathPart(GetSimpleTypeName(rootTypeName)) + ".cs";
+        yield return GetSimple(rootTypeName).SanitizeFileNamePart() + ".cs";
     }
 
     private static bool IsStrongPrefix(string fileStem, string simpleName) =>
         fileStem.Length >= 4
         && simpleName.Length > fileStem.Length
         && simpleName.StartsWith(fileStem, StringComparison.OrdinalIgnoreCase);
-
-    private static string GetPrimaryStem(string fileStem)
-    {
-        var index = fileStem.IndexOf('.');
-        return index < 0 ? fileStem : fileStem[..index];
-    }
 
     private static List<string> SplitNameTokens(string name)
     {
@@ -280,34 +381,22 @@ public static class SourceFileOwnershipFilter
     private static bool StartsWithName(string value, string prefix) =>
         value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
 
-    private static string GetRootTypeName(string typeFullName)
+    private static bool NamespaceMatchesPath(string rootTypeName, string relativePath)
     {
-        var nestedIndex = typeFullName.IndexOf('+');
-        return nestedIndex < 0 ? typeFullName : typeFullName[..nestedIndex];
+        var namespaceName = GetNamespace(rootTypeName);
+        if (string.IsNullOrWhiteSpace(namespaceName))
+            return false;
+
+        var namespaceParts = namespaceName.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var directoryParts = relativePath.GetDirectoryParts();
+        if (directoryParts.Count < namespaceParts.Length)
+            return false;
+
+        var offset = directoryParts.Count - namespaceParts.Length;
+        return namespaceParts
+            .AsValueEnumerable()
+            .Select((part, index) => NameEquals(part, directoryParts[offset + index]))
+            .All(matches => matches);
     }
 
-    private static string GetSimpleTypeName(string typeName)
-    {
-        var nestedIndex = typeName.LastIndexOf('+');
-        var namespaceIndex = typeName.LastIndexOf('.');
-        var index = Math.Max(nestedIndex, namespaceIndex);
-        var simpleName = index < 0 ? typeName : typeName[(index + 1)..];
-        var arityIndex = simpleName.IndexOf('`');
-        return arityIndex < 0 ? simpleName : simpleName[..arityIndex];
-    }
-
-    private static string GetNamespace(string typeName)
-    {
-        var rootTypeName = GetRootTypeName(typeName);
-        var namespaceIndex = rootTypeName.LastIndexOf('.');
-        return namespaceIndex < 0 ? string.Empty : rootTypeName[..namespaceIndex];
-    }
-
-    private static string SanitizePathPart(string value)
-    {
-        var invalidChars = Path.GetInvalidFileNameChars();
-        return string.Concat(value.Select(ch => invalidChars.Contains(ch) ? '_' : ch));
-    }
-
-    private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
 }

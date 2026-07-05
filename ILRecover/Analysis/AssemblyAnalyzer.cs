@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using ICSharpCode.Decompiler.Metadata;
+using ILRecover.Helpers;
 using ILRecover.Models;
 using ILRecover.Pdb;
 using ZLinq;
@@ -38,7 +39,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
         var sourceByNormalizedPath = pdbSources
             .AsValueEnumerable()
-            .GroupBy(s => NormalizePath(s.OriginalPath))
+            .GroupBy(s => s.OriginalPath.NormalizePathKey())
             .ToDictionary(g => g.Key, g => g.First());
         RemoveNonPreferredNestedTypeMethods(docToMethods, sourceByNormalizedPath);
 
@@ -60,7 +61,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
             var userMethods = methods
                 .AsValueEnumerable()
-                .Where(m => !IsCompilerGenerated(m.TypeFullName))
+                .Where(m => !TypeNameHelper.IsCompilerGenerated(m.TypeFullName))
                 .ToList();
 
             typeDeclarationsByDocument.TryGetValue(normalizedDoc, out var typeDeclarations);
@@ -85,8 +86,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
         skipped.AddRange(pdbSources
             .AsValueEnumerable()
-            .Where(source => !docToMethods.ContainsKey(NormalizePath(source.OriginalPath))
-                             && !typeDeclarationsByDocument.ContainsKey(NormalizePath(source.OriginalPath)))
+            .Where(source => !docToMethods.ContainsKey(source.OriginalPath.NormalizePathKey())
+                             && !typeDeclarationsByDocument.ContainsKey(source.OriginalPath.NormalizePathKey()))
             .Select(source => source.OriginalPath)
             .ToList());
 
@@ -110,8 +111,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         foreach (var typeHandle in mdReader.TypeDefinitions)
         {
             if (!typeNames.TryGetValue(typeHandle, out var typeName)
-                || IsCompilerGenerated(typeName)
-                || IsNestedType(typeName)
+                || TypeNameHelper.IsCompilerGenerated(typeName)
+                || TypeNameHelper.IsNested(typeName)
                 || IsEmbeddedInteropType(mdReader, typeHandle))
                 continue;
 
@@ -128,11 +129,11 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
         var mappedPaths = mapped
             .AsValueEnumerable()
-            .Select(map => NormalizePath(map.OriginalPath))
+            .Select(map => map.OriginalPath.NormalizePathKey())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var skipped = pdbSources
             .AsValueEnumerable()
-            .Where(source => !mappedPaths.Contains(NormalizePath(source.OriginalPath)))
+            .Where(source => !mappedPaths.Contains(source.OriginalPath.NormalizePathKey()))
             .Select(source => source.OriginalPath)
             .ToList();
 
@@ -147,7 +148,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
     private static IReadOnlyList<string> GetUserTypeNames(IEnumerable<string> typeNames) =>
         typeNames
             .AsValueEnumerable()
-            .Where(typeName => !IsCompilerGenerated(typeName) && !IsNestedType(typeName))
+            .Where(typeName => !TypeNameHelper.IsCompilerGenerated(typeName) && !TypeNameHelper.IsNested(typeName))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -155,7 +156,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         IReadOnlyList<PdbSourceInfo> pdbSources) =>
         pdbSources
             .AsValueEnumerable()
-            .GroupBy(source => Path.GetFileNameWithoutExtension(source.OriginalPath), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(source => source.OriginalPath.GetFileStem(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group
@@ -177,7 +178,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         return pdbSources
             .AsValueEnumerable()
             .Where(source => !source.IsGenerated)
-            .OrderBy(source => LevenshteinDistance(simpleName, Path.GetFileNameWithoutExtension(source.OriginalPath)))
+            .OrderBy(source => LevenshteinDistance(simpleName, source.OriginalPath.GetFileStem()))
             .ThenBy(source => source.OriginalPath, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
     }
@@ -228,7 +229,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         foreach (var group in methodsByType)
         {
             var entries = group.ToList();
-            if (IsNestedType(group.Key))
+            if (TypeNameHelper.IsNested(group.Key))
             {
                 var documents = entries
                     .AsValueEnumerable()
@@ -325,7 +326,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
                 if (string.IsNullOrWhiteSpace(docPath)) continue;
 
-                var normalized = NormalizePath(docPath);
+                var normalized = docPath.NormalizePathKey();
                 var entry = MapMethodToSourceEntry(typeName, methodHandle, generatedMethodOwners,
                     GetMethodLocalVariables(methodHandle, methodLocalVariables));
                 if (entry is null) continue;
@@ -357,7 +358,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         foreach (var pair in typeDefinitionDocuments)
         {
             var typeHandle = MetadataTokens.TypeDefinitionHandle(pair.Key);
-            if (!typeNames.TryGetValue(typeHandle, out var typeName) || IsCompilerGenerated(typeName))
+            if (!typeNames.TryGetValue(typeHandle, out var typeName)
+                || TypeNameHelper.IsCompilerGenerated(typeName))
                 continue;
 
             var ownerDocuments = pair.Value
@@ -366,12 +368,12 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
                 .ThenBy(document => document, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (IsNestedType(typeName) && typeDocuments.TryGetValue(typeName, out var exactTypeDocuments))
+            if (TypeNameHelper.IsNested(typeName) && typeDocuments.TryGetValue(typeName, out var exactTypeDocuments))
                 ownerDocuments = ownerDocuments
                     .Where(exactTypeDocuments.Contains)
                     .ToList();
 
-            if (IsNestedType(typeName))
+            if (TypeNameHelper.IsNested(typeName))
                 ownerDocuments = PreferNestedTypeDocument(typeName,
                     AddExpectedNestedTypeDocumentCandidates(typeName, ownerDocuments, sourceByNormalizedPath));
 
@@ -413,7 +415,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         foreach (var group in declarationsByType)
         {
             var entries = group.ToList();
-            if (IsNestedType(group.Key))
+            if (TypeNameHelper.IsNested(group.Key))
             {
                 var documents = entries
                     .AsValueEnumerable()
@@ -532,7 +534,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
                 var candidate = string.IsNullOrEmpty(directory)
                     ? expectedFileName
                     : directory + "/" + expectedFileName;
-                candidate = NormalizePath(candidate);
+                candidate = candidate.NormalizePathKey();
                 if (sourceByNormalizedPath.ContainsKey(candidate))
                     result.Add(candidate);
             }
@@ -547,7 +549,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
     private static string GetDocumentDirectory(string document)
     {
-        var normalized = document.Replace('\\', '/');
+        var normalized = document.NormalizePath();
         var separatorIndex = normalized.LastIndexOf('/');
         return separatorIndex >= 0 ? normalized[..separatorIndex] : string.Empty;
     }
@@ -612,7 +614,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
     private static string GetDocumentFileName(string document)
     {
-        var normalized = document.Replace('\\', '/');
+        var normalized = document.NormalizePath();
         var separatorIndex = normalized.LastIndexOf('/');
         return separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized;
     }
@@ -671,7 +673,9 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         {
             var typeHandle = pair.Key;
             var typeName = pair.Value;
-            if (!IsNestedType(typeName) || IsCompilerGenerated(typeName) || mappedHandles.Contains(typeHandle))
+            if (!TypeNameHelper.IsNested(typeName)
+                || TypeNameHelper.IsCompilerGenerated(typeName)
+                || mappedHandles.Contains(typeHandle))
                 continue;
 
             var declaringTypeHandle = reader.GetTypeDefinition(typeHandle).GetDeclaringType();
@@ -764,7 +768,8 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
         foreach (var typeHandle in reader.TypeDefinitions)
         {
-            if (!typeNames.TryGetValue(typeHandle, out var typeName) || IsCompilerGenerated(typeName))
+            if (!typeNames.TryGetValue(typeHandle, out var typeName)
+                || TypeNameHelper.IsCompilerGenerated(typeName))
                 continue;
 
             foreach (var methodHandle in reader.GetTypeDefinition(typeHandle).GetMethods())
@@ -803,7 +808,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         IReadOnlyDictionary<string, SourceFileMethodEntry> generatedMethodOwners,
         IReadOnlyList<LocalVariableDebugInfo> localVariables)
     {
-        if (!IsCompilerGenerated(typeName))
+        if (!TypeNameHelper.IsCompilerGenerated(typeName))
             return new SourceFileMethodEntry(typeName, methodHandle, localVariables);
 
         if (generatedMethodOwners.GetValueOrDefault(typeName) is not { } owner)
@@ -882,7 +887,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
     private string ToRelativePath(string originalPath, string? commonSourceRoot)
     {
-        var normalized = originalPath.Replace('\\', '/');
+        var normalized = originalPath.NormalizePath();
 
         if (!string.IsNullOrWhiteSpace(commonSourceRoot)
             && normalized.StartsWith(commonSourceRoot, StringComparison.OrdinalIgnoreCase))
@@ -944,7 +949,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
     private static string GetNormalizedDirectoryPath(string path)
     {
-        var normalized = path.Replace('\\', '/');
+        var normalized = path.NormalizePath();
         var fileNameIdx = normalized.LastIndexOf('/');
         return fileNameIdx < 0 ? string.Empty : normalized[..fileNameIdx];
     }
@@ -957,9 +962,4 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         return path.StartsWith("/", StringComparison.Ordinal) ? "/" : string.Empty;
     }
 
-    private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
-
-    private static bool IsNestedType(string typeName) => typeName.Contains('+', StringComparison.Ordinal);
-
-    private static string NormalizePath(string path) => path.Replace('\\', '/').ToLowerInvariant();
 }

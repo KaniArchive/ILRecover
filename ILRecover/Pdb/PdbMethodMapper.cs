@@ -1,6 +1,7 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using ICSharpCode.Decompiler.Metadata;
+using ILRecover.Helpers;
 using ZLinq;
 
 namespace ILRecover.Pdb;
@@ -73,12 +74,12 @@ public static class PdbMethodMapper
             foreach (var methodHandle in typeDefinition.GetMethods())
             {
                 var row = MetadataTokens.GetRowNumber(methodHandle);
-                var rootTypeName = GetRootTypeName(typeName);
+                var rootTypeName = TypeNameHelper.GetRoot(typeName);
                 result[row] = new MethodInfo(
                     typeName,
                     rootTypeName,
-                    GetSimpleTypeName(typeName),
-                    GetSimpleTypeName(rootTypeName));
+                    TypeNameHelper.GetSimple(typeName),
+                    TypeNameHelper.GetSimple(rootTypeName));
             }
         }
 
@@ -145,9 +146,9 @@ public static class PdbMethodMapper
 
         foreach (var documentGroup in documentPathsByPdbRow
                      .AsValueEnumerable()
-                     .GroupBy(pair => NormalizePath(pair.Value), StringComparer.OrdinalIgnoreCase))
+                     .GroupBy(pair => pair.Value.NormalizePathKey(), StringComparer.OrdinalIgnoreCase))
         {
-            var fileStem = Path.GetFileNameWithoutExtension(documentGroup.Key);
+            var fileStem = documentGroup.Key.GetFileStem();
             if (string.IsNullOrWhiteSpace(fileStem))
                 continue;
 
@@ -301,8 +302,8 @@ public static class PdbMethodMapper
             mappedCount++;
             mappedTypes.Add(method.RootTypeName);
 
-            var rootSimpleType = GetSimpleTypeName(method.RootTypeName);
-            var nestedSimpleType = GetSimpleTypeName(method.TypeName);
+            var rootSimpleType = TypeNameHelper.GetSimple(method.RootTypeName);
+            var nestedSimpleType = TypeNameHelper.GetSimple(method.TypeName);
 
             if (string.Equals(rootSimpleType, fileStem, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(nestedSimpleType, fileStem, StringComparison.OrdinalIgnoreCase))
@@ -341,25 +342,6 @@ public static class PdbMethodMapper
         || fileStem.Contains(method.RootSimpleName, StringComparison.OrdinalIgnoreCase)
         || method.TypeSimpleName.Contains(fileStem, StringComparison.OrdinalIgnoreCase)
         || fileStem.Contains(method.TypeSimpleName, StringComparison.OrdinalIgnoreCase);
-
-    private static string GetRootTypeName(string typeName)
-    {
-        var nestedIndex = typeName.IndexOf('+');
-        return nestedIndex < 0 ? typeName : typeName[..nestedIndex];
-    }
-
-    private static string GetSimpleTypeName(string typeName)
-    {
-        var nestedIndex = typeName.LastIndexOf('+');
-        var namespaceIndex = typeName.LastIndexOf('.');
-        var index = Math.Max(nestedIndex, namespaceIndex);
-        var simpleName = index < 0 ? typeName : typeName[(index + 1)..];
-        var arityIndex = simpleName.IndexOf('`');
-        return arityIndex < 0 ? simpleName : simpleName[..arityIndex];
-    }
-
-    private static string NormalizePath(string path) => path.Replace('\\', '/').ToLowerInvariant();
-
     private sealed record MethodInfo(
         string TypeName,
         string RootTypeName,

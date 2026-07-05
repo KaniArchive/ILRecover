@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpyX.PdbProvider;
 using ILRecover.Analysis.SourceGen;
+using ILRecover.Helpers;
 using ILRecover.Models;
 using ZLinq;
 
@@ -53,7 +54,7 @@ public static class PdbReader
             .AsValueEnumerable()
             .Select(match => match.Value)
             .Where(path => !string.IsNullOrWhiteSpace(path))
-            .GroupBy(NormalizePath, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(path => path.NormalizePathKey(), StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(path => new PdbSourceInfo(path, IsGenerated(path)))
@@ -171,7 +172,7 @@ public static class PdbReader
 
             var documentPath = reader.GetString(reader.GetDocument(documentHandle).Name);
             if (!string.IsNullOrWhiteSpace(documentPath))
-                documents.Add(NormalizePath(documentPath));
+                documents.Add(documentPath.NormalizePathKey());
         }
 
         return documents;
@@ -179,7 +180,7 @@ public static class PdbReader
 
     private static bool IsGenerated(string path)
     {
-        var p = path.Replace('\\', '/');
+        var p = path.NormalizePath();
         return p.Contains("/obj/")
                || p.EndsWith(".g.cs")
                || p.EndsWith(".Generated.cs")
@@ -191,7 +192,4 @@ public static class PdbReader
         name.StartsWith("CS$", StringComparison.Ordinal)
         || name.StartsWith("<", StringComparison.Ordinal)
         || name.Contains("__", StringComparison.Ordinal);
-
-    private static string NormalizePath(string path) =>
-        path.Replace('\\', '/').ToLowerInvariant();
 }

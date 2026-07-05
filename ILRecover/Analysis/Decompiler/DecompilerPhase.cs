@@ -89,7 +89,7 @@ public partial class DecompilerPhase(
             .SelectMany(file => file.TypeFullNames
                 .AsValueEnumerable()
                 .Distinct(StringComparer.Ordinal)
-                .Select(typeFullName => (typeFullName: GetRootTypeName(typeFullName), file)))
+                .Select(typeFullName => (typeFullName: TypeNameHelper.GetRoot(typeFullName), file)))
             .GroupBy(pair => pair.typeFullName, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -103,7 +103,7 @@ public partial class DecompilerPhase(
             var methods = file.Methods.ToList();
             var typeDeclarations = (file.TypeDeclarations ?? []).ToList();
 
-            foreach (var typeFullName in file.TypeFullNames.Select(GetRootTypeName).Distinct(StringComparer.Ordinal))
+            foreach (var typeFullName in file.TypeFullNames.Select(TypeNameHelper.GetRoot).Distinct(StringComparer.Ordinal))
             {
                 if (!generatedCompanionsByType.TryGetValue(typeFullName, out var companions))
                     continue;
@@ -152,8 +152,8 @@ public partial class DecompilerPhase(
 
         var typeNames = file.TypeFullNames
             .AsValueEnumerable()
-            .Where(typeName => !IsCompilerGenerated(typeName))
-            .Select(GetRootTypeName)
+            .Where(typeName => !TypeNameHelper.IsCompilerGenerated(typeName))
+            .Select(TypeNameHelper.GetRoot)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -184,8 +184,8 @@ public partial class DecompilerPhase(
     {
         var typeNames = file.TypeFullNames
             .AsValueEnumerable()
-            .Where(typeName => !IsCompilerGenerated(typeName))
-            .Select(GetRootTypeName)
+            .Where(typeName => !TypeNameHelper.IsCompilerGenerated(typeName))
+            .Select(TypeNameHelper.GetRoot)
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -216,7 +216,7 @@ public partial class DecompilerPhase(
     {
         try
         {
-            var normalizedPath = file.RelativePath.Replace('\\', '/');
+            var normalizedPath = file.RelativePath.NormalizePath();
             if (!GetDocumentSlices(decompiler, typeName).TryGetValue(normalizedPath, out var tree))
                 return null;
 
@@ -228,12 +228,6 @@ public partial class DecompilerPhase(
         {
             return null;
         }
-    }
-
-    private static string GetRootTypeName(string typeFullName)
-    {
-        var nestedIdx = typeFullName.IndexOf('+');
-        return nestedIdx >= 0 ? typeFullName[..nestedIdx] : typeFullName;
     }
 
     private IReadOnlyDictionary<string, SyntaxTree> GetDocumentSlices(CSharpDecompiler decompiler, string rootTypeName)
@@ -262,18 +256,18 @@ public partial class DecompilerPhase(
         var requests = (_sliceSourceFiles ?? mapped)
             .AsValueEnumerable()
             .Where(file => file.TypeFullNames.Any(typeName =>
-                string.Equals(GetRootTypeName(typeName), rootTypeName, StringComparison.Ordinal)))
+                string.Equals(TypeNameHelper.GetRoot(typeName), rootTypeName, StringComparison.Ordinal)))
             .Select(file => new SourceDocumentSliceRequest(
-                file.RelativePath.Replace('\\', '/'),
+                file.RelativePath.NormalizePath(),
                 file.Methods
                     .AsValueEnumerable()
-                    .Where(method => string.Equals(GetRootTypeName(method.TypeFullName), rootTypeName,
+                    .Where(method => string.Equals(TypeNameHelper.GetRoot(method.TypeFullName), rootTypeName,
                         StringComparison.Ordinal))
                     .Select(method => (EntityHandle)method.MethodHandle)
                     .ToList(),
                 (file.TypeDeclarations ?? [])
                 .AsValueEnumerable()
-                .Where(typeDeclaration => string.Equals(GetRootTypeName(typeDeclaration.TypeFullName), rootTypeName,
+                .Where(typeDeclaration => string.Equals(TypeNameHelper.GetRoot(typeDeclaration.TypeFullName), rootTypeName,
                     StringComparison.Ordinal))
                 .Select(typeDeclaration => (EntityHandle)typeDeclaration.TypeHandle)
                 .ToList(),
@@ -381,6 +375,4 @@ public partial class DecompilerPhase(
                 Log.Warning($"Dependency search directory not found: {fullPath}");
         }
     }
-
-    private static bool IsCompilerGenerated(string typeName) => typeName.StartsWith('<') || typeName.Contains("+<");
 }
