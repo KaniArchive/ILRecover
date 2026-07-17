@@ -20,11 +20,22 @@ public static class Parser
         string? dotnet,
         string[]? shift,
         bool classOwnFile,
-        bool allowUnmapped)
+        bool allowUnmapped,
+        string? sourcePaths,
+        bool externalPriority)
     {
         var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
         IReadOnlyList<string> dependencyDirs = dependencies ?? [];
         var remapOptions = new PdbMethodRemapOptions(shift ?? []);
+        var externalSourcePaths = classOwnFile && allowUnmapped
+            ? ReadExternalSourcePaths(sourcePaths)
+            : [];
+        if (!classOwnFile && !string.IsNullOrWhiteSpace(sourcePaths))
+            Log.Warning("--source-paths ignored without --class-own-file");
+        if (classOwnFile && !allowUnmapped && !string.IsNullOrWhiteSpace(sourcePaths))
+            Log.Warning("--source-paths ignored without --allow-unmapped");
+        if (externalPriority && externalSourcePaths.Count == 0)
+            Log.Warning("--external-priority was set without --source-paths");
 
         var targets = ValidateAndResolveTargets(input);
         var projectPaths = new List<string>();
@@ -55,7 +66,9 @@ public static class Parser
                     mapped,
                     allowUnmapped,
                     result.SkippedRelativePaths,
-                    result.TypeFullNames);
+                    result.TypeFullNames,
+                    externalSourcePaths,
+                    externalPriority);
                 mapped = ownershipResult.Mapped;
                 Log.Success(
                     $"Mapped: {mapped.Count} Skipped: {result.Skipped.Count} Rejected: {ownershipResult.RejectedTypeCount} Unmapped: {ownershipResult.UnmappedTypeCount}");
@@ -98,6 +111,27 @@ public static class Parser
         Log.Success($"Wrote: {solutionPath}");
 
         Log.Success("All Done!");
+    }
+
+    private static IReadOnlyList<string> ReadExternalSourcePaths(string? sourcePaths)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePaths))
+            return [];
+
+        var fullPath = Path.GetFullPath(sourcePaths);
+        if (!File.Exists(fullPath))
+        {
+            Log.Error($"Source path list not found: {fullPath}");
+            Log.Shutdown();
+            Environment.Exit(1);
+        }
+
+        return File.ReadLines(fullPath)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Where(line => !line.StartsWith("#", StringComparison.Ordinal))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static List<TargetProject> ValidateAndResolveTargets(string inputFolder)

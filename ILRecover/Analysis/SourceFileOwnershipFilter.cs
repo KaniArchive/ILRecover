@@ -16,7 +16,9 @@ public static class SourceFileOwnershipFilter
         IReadOnlyList<SourceFileMap> sourceFiles,
         bool allowUnmapped,
         IReadOnlyList<string>? skippedPaths = null,
-        IReadOnlyList<string>? typeFullNames = null)
+        IReadOnlyList<string>? typeFullNames = null,
+        IReadOnlyList<string>? externalSourcePaths = null,
+        bool externalPriority = false)
     {
         var mapped = new List<SourceFileMap>();
         var keptRoots = new HashSet<string>(StringComparer.Ordinal);
@@ -56,7 +58,8 @@ public static class SourceFileOwnershipFilter
             .ToList();
 
         var remappedRejectedFiles = allowUnmapped
-            ? FindRejectedDocumentMatches(sourceFiles, skippedPaths ?? [], unmappedRoots)
+            ? FindRejectedDocumentMatches(sourceFiles, skippedPaths ?? [], externalSourcePaths ?? [], unmappedRoots,
+                externalPriority)
             : [];
 
         var remappedRejectedRoots = remappedRejectedFiles
@@ -148,7 +151,9 @@ public static class SourceFileOwnershipFilter
     private static List<SourceFileMap> FindRejectedDocumentMatches(
         IReadOnlyList<SourceFileMap> sourceFiles,
         IReadOnlyList<string> skippedPaths,
-        IReadOnlyList<string> rejectedRoots)
+        IReadOnlyList<string> externalSourcePaths,
+        IReadOnlyList<string> rejectedRoots,
+        bool externalPriority)
     {
         if (rejectedRoots.Count == 0)
             return [];
@@ -159,7 +164,7 @@ public static class SourceFileOwnershipFilter
             .Select(file => file.RelativePath.NormalizePath())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var availableDocuments = sourceFiles
+        var pdbDocuments = sourceFiles
             .AsValueEnumerable()
             .Select(file => file.RelativePath)
             .Concat(skippedPaths)
@@ -168,14 +173,42 @@ public static class SourceFileOwnershipFilter
             .Where(path => !usedPaths.Contains(path.NormalizePath()))
             .ToList();
 
+        var externalDocuments = externalSourcePaths
+            .AsValueEnumerable()
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !usedPaths.Contains(path.NormalizePath()))
+            .ToList();
+
+        var documentTiers = externalPriority
+            ? [externalDocuments, pdbDocuments]
+            : new[] { pdbDocuments, externalDocuments };
+
         var result = new List<SourceFileMap>();
         var claimedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in rejectedRoots.GroupBy(GetSimple, StringComparer.OrdinalIgnoreCase))
         {
-            foreach (var match in FindMatchingDocuments(group.ToList(), availableDocuments, claimedPaths))
+            var remainingRoots = group.ToList();
+            foreach (var documents in documentTiers)
             {
-                claimedPaths.Add(match.RelativePath);
-                result.Add(CreateMatchedDocumentFile(match.RelativePath, match.RootTypeName));
+                if (remainingRoots.Count == 0)
+                    break;
+
+                var matches = FindMatchingDocuments(remainingRoots, documents, claimedPaths);
+                foreach (var match in matches)
+                {
+                    claimedPaths.Add(match.RelativePath);
+                    result.Add(CreateMatchedDocumentFile(match.RelativePath, match.RootTypeName));
+                }
+
+                var matchedRoots = matches
+                    .AsValueEnumerable()
+                    .Select(match => match.RootTypeName)
+                    .ToHashSet(StringComparer.Ordinal);
+                remainingRoots = remainingRoots
+                    .AsValueEnumerable()
+                    .Where(root => !matchedRoots.Contains(root))
+                    .ToList();
             }
         }
 

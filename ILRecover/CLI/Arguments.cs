@@ -14,6 +14,8 @@ public static class Args
     /// <param name="shift">-sh, Assembly name patterns that enable shifted PDB method-row recovery.</param>
     /// <param name="classOwnFile">-cf, Keep only classes that are owned by the mapped source file name.</param>
     /// <param name="allowUnmapped">-au, Emit rejected class ownership matches under Unmapped for manual recovery.</param>
+    /// <param name="sourcePaths">-sp, Additional source path list used to map rejected/unmapped class-owned files.</param>
+    /// <param name="externalPriority">-ep, Prefer --source-paths entries over PDB documents when remapping rejected/unmapped files.</param>
     public static void Run(
         string input,
         string output,
@@ -23,6 +25,9 @@ public static class Args
         string[]? shift = null,
         bool classOwnFile = false,
         bool allowUnmapped = false,
+        string? sourcePaths = null,
+        bool externalPriority = false,
         params string[]? dependencies) =>
-        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift, classOwnFile, allowUnmapped);
+        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift, classOwnFile, allowUnmapped,
+            sourcePaths, externalPriority);
 }
