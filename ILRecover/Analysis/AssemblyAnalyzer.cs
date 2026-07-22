@@ -9,7 +9,7 @@ using ZLinq;
 
 namespace ILRecover.Analysis;
 
-public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMethodRemapping = false)
+public class AssemblyAnalyzer(TargetProject target)
 {
     private static readonly HashSet<string> StateMachineAttributeNames =
     [
@@ -18,21 +18,21 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
         "System.Runtime.CompilerServices.AsyncIteratorStateMachineAttribute"
     ];
 
-    private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
+    private readonly string _assemblyName = target.Name;
 
     public AnalysisResult Analyze()
     {
-        var pdbSources = PdbReader.ReadSourceFiles(pdbPath);
+        var pdbSources = PdbReader.ReadSourceFiles(target.PdbPath);
         var commonSourceRoot = FindCommonSourceRoot(pdbSources.Select(source => source.OriginalPath));
 
-        var file = new PEFile(dllPath);
+        var file = new PEFile(target.AssemblyPath);
         var mdReader = file.Metadata;
 
         var typeNames = BuildTypeNameLookup(mdReader);
-        var methodDebugMap = enablePdbMethodRemapping
-            ? PdbMethodMapper.Build(dllPath, pdbPath, typeNames)
-            : PdbMethodDebugMap.Identity(PdbReader.ReadMethodDocumentPaths(dllPath, pdbPath));
-        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(dllPath, pdbPath, methodDebugMap);
+        var methodDebugMap = target.PdbMethodRemapOptions.Enabled
+            ? PdbMethodMapper.Build(target.AssemblyPath, target.PdbPath, typeNames, target.PdbMethodRemapOptions)
+            : PdbMethodDebugMap.Identity(PdbReader.ReadMethodDocumentPaths(target.AssemblyPath, target.PdbPath));
+        var methodLocalVariables = PdbReader.ReadMethodLocalVariables(target.AssemblyPath, target.PdbPath, methodDebugMap);
         var docToMethods = BuildDocumentMethodMap(mdReader, typeNames, methodLocalVariables, methodDebugMap);
         if (docToMethods.Count == 0)
             return BuildFallbackAnalysis(mdReader, typeNames, pdbSources, commonSourceRoot);
@@ -45,7 +45,7 @@ public class AssemblyAnalyzer(string dllPath, string pdbPath, bool enablePdbMeth
 
         var typeDocuments = BuildTypeDocumentMap(docToMethods);
         var typeDeclarationsByDocument =
-            BuildTypeDeclarationDocumentMap(mdReader, pdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
+            BuildTypeDeclarationDocumentMap(mdReader, target.PdbPath, typeNames, sourceByNormalizedPath, typeDocuments);
 
         var mapped = new List<SourceFileMap>();
         var skipped = new List<string>();

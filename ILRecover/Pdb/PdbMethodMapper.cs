@@ -9,20 +9,24 @@ namespace ILRecover.Pdb;
 public static class PdbMethodMapper
 {
     private const int ClusterGap = 16;
-    private const int MaxShift = 40000;
     private const int CandidateWindow = 8;
 
-    public static PdbMethodDebugMap Build(string assemblyPath, string pdbPath)
+    public static PdbMethodDebugMap Build(
+        string assemblyPath,
+        string pdbPath,
+        PdbMethodRemapOptions? options = null)
     {
         using var file = new PEFile(assemblyPath);
-        return Build(assemblyPath, pdbPath, BuildTypeNameLookup(file.Metadata));
+        return Build(assemblyPath, pdbPath, BuildTypeNameLookup(file.Metadata), options);
     }
 
     public static PdbMethodDebugMap Build(
         string assemblyPath,
         string pdbPath,
-        IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames)
+        IReadOnlyDictionary<TypeDefinitionHandle, string> typeNames,
+        PdbMethodRemapOptions? options = null)
     {
+        options ??= PdbMethodRemapOptions.Disabled;
         var documentPathsByPdbRow = PdbReader.ReadMethodDocumentPaths(assemblyPath, pdbPath);
         if (documentPathsByPdbRow.Count == 0 || PdbReader.DetectFormat(pdbPath) != PdbFormat.Portable)
             return new PdbMethodDebugMap(documentPathsByPdbRow, new Dictionary<int, int>());
@@ -30,7 +34,11 @@ public static class PdbMethodMapper
         using var file = new PEFile(assemblyPath);
         var methodInfos = BuildMethodInfos(file.Metadata, typeNames);
         var methodRowsBySimpleTypeName = BuildMethodRowsBySimpleTypeName(methodInfos);
-        var remappedRows = BuildRemappedRows(documentPathsByPdbRow, methodInfos, methodRowsBySimpleTypeName);
+        var remappedRows = BuildRemappedRows(
+            documentPathsByPdbRow,
+            methodInfos,
+            methodRowsBySimpleTypeName,
+            options.MaxShift);
 
         if (remappedRows.Count == 0)
             return new PdbMethodDebugMap(documentPathsByPdbRow, new Dictionary<int, int>());
@@ -140,7 +148,8 @@ public static class PdbMethodMapper
     private static Dictionary<int, int> BuildRemappedRows(
         IReadOnlyDictionary<int, string> documentPathsByPdbRow,
         IReadOnlyDictionary<int, MethodInfo> methodInfos,
-        IReadOnlyDictionary<string, List<int>> methodRowsBySimpleTypeName)
+        IReadOnlyDictionary<string, List<int>> methodRowsBySimpleTypeName,
+        int maxShift)
     {
         var result = new Dictionary<int, int>();
 
@@ -161,7 +170,7 @@ public static class PdbMethodMapper
                 if (cluster.Count < 3)
                     continue;
 
-                var score = FindBestShift(cluster, fileStem, methodInfos, matchingRows);
+                var score = FindBestShift(cluster, fileStem, methodInfos, matchingRows, maxShift);
                 if (!ShouldAccept(score, cluster.Count))
                     continue;
 
@@ -199,8 +208,9 @@ public static class PdbMethodMapper
         IReadOnlyList<int> rows,
         string fileStem,
         IReadOnlyDictionary<int, MethodInfo> methodInfos,
-        IReadOnlyList<int> matchingRows) =>
-        BuildCandidateShifts(rows, matchingRows)
+        IReadOnlyList<int> matchingRows,
+        int maxShift) =>
+        BuildCandidateShifts(rows, matchingRows, maxShift)
             .AsValueEnumerable()
             .Select(shift => ScoreShift(rows, shift, fileStem, methodInfos))
             .OrderByDescending(score => score.ExactTypeNameMatches)
@@ -223,7 +233,8 @@ public static class PdbMethodMapper
 
     private static HashSet<int> BuildCandidateShifts(
         IReadOnlyList<int> rows,
-        IReadOnlyList<int> matchingRows)
+        IReadOnlyList<int> matchingRows,
+        int maxShift)
     {
         var shifts = new HashSet<int>();
         if (rows.Count == 0 || matchingRows.Count == 0)
@@ -233,7 +244,7 @@ public static class PdbMethodMapper
         {
             foreach (var sourceRow in rows)
             foreach (var targetRow in matchingRows)
-                AddShiftNeighborhood(shifts, targetRow - sourceRow);
+                AddShiftNeighborhood(shifts, targetRow - sourceRow, maxShift);
         }
         else
         {
@@ -241,12 +252,12 @@ public static class PdbMethodMapper
             var sourceEnd = rows[^1];
             foreach (var range in BuildRanges(matchingRows))
             {
-                AddShiftNeighborhood(shifts, range.Start - sourceStart);
-                AddShiftNeighborhood(shifts, range.End - sourceEnd);
+                AddShiftNeighborhood(shifts, range.Start - sourceStart, maxShift);
+                AddShiftNeighborhood(shifts, range.End - sourceEnd, maxShift);
 
                 var sourceMid = sourceStart + (sourceEnd - sourceStart) / 2;
                 var targetMid = range.Start + (range.End - range.Start) / 2;
-                AddShiftNeighborhood(shifts, targetMid - sourceMid);
+                AddShiftNeighborhood(shifts, targetMid - sourceMid, maxShift);
             }
         }
 
@@ -254,13 +265,13 @@ public static class PdbMethodMapper
         return shifts;
     }
 
-    private static void AddShiftNeighborhood(HashSet<int> shifts, int baseShift)
+    private static void AddShiftNeighborhood(HashSet<int> shifts, int baseShift, int maxShift)
     {
-        if (Math.Abs(baseShift) > MaxShift)
+        if (Math.Abs(baseShift) > maxShift)
             return;
 
         for (var shift = baseShift - CandidateWindow; shift <= baseShift + CandidateWindow; shift++)
-            if (Math.Abs(shift) <= MaxShift)
+            if (Math.Abs(shift) <= maxShift)
                 shifts.Add(shift);
     }
 

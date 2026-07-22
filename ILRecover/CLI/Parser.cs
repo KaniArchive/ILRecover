@@ -1,11 +1,9 @@
 using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
-using ICSharpCode.Decompiler.Metadata;
 using ILRecover.Analysis;
 using ILRecover.Analysis.Decompiler;
 using ILRecover.Helpers;
+using ILRecover.Models;
 using ILRecover.Pdb;
-using System.Reflection.PortableExecutable;
-using ZLinq;
 
 namespace ILRecover.CLI;
 
@@ -19,223 +17,116 @@ public static class Parser
         string? solution,
         string? dotnet,
         string[]? shift,
+        int shiftMax,
         bool classOwnFile,
         bool allowUnmapped,
         string? sourcePaths,
         bool externalPriority)
     {
-        var csVersionStr = csVersion > 0 ? csVersion.ToString() : null;
-        IReadOnlyList<string> dependencyDirs = dependencies ?? [];
-        var remapOptions = new PdbMethodRemapOptions(shift ?? []);
-        var externalSourcePaths = classOwnFile && allowUnmapped
-            ? ReadExternalSourcePaths(sourcePaths)
-            : [];
-        if (!classOwnFile && !string.IsNullOrWhiteSpace(sourcePaths))
-            Log.Warning("--source-paths ignored without --class-own-file");
-        if (classOwnFile && !allowUnmapped && !string.IsNullOrWhiteSpace(sourcePaths))
-            Log.Warning("--source-paths ignored without --allow-unmapped");
-        if (externalPriority && externalSourcePaths.Count == 0)
-            Log.Warning("--external-priority was set without --source-paths");
+        if (shiftMax <= 0)
+            Fail("--shift-max must be greater than 0");
 
-        var targets = ValidateAndResolveTargets(input);
+        var options = new RecoverOptions(
+            input,
+            output,
+            csVersion > 0 ? csVersion.ToString() : null,
+            dependencies ?? [],
+            solution,
+            dotnet,
+            new PdbMethodRemapOptions(shift ?? [], shiftMax),
+            classOwnFile
+                ? new SourceOwnershipOptions(true, allowUnmapped, sourcePaths, externalPriority)
+                : SourceOwnershipOptions.Disabled with
+                {
+                    SourcePathListPath = sourcePaths,
+                    ExternalPriority = externalPriority
+                });
+
+        Execute(options);
+    }
+
+    private static void Execute(RecoverOptions options)
+    {
+        var sourceOwnership = new SourceOwnershipService(options.SourceOwnership);
+        sourceOwnership.WarnIgnoredOptions();
+
+        var targets = new TargetProjectResolver(options).Resolve();
         var projectPaths = new List<string>();
 
         foreach (var target in targets)
-        {
-            Log.Info($"{target.Name}");
-
-            var outputDir = Path.Combine(output, target.Name);
-            var enablePdbMethodRemapping = remapOptions.IsEnabledFor(target.Name);
-
-            if (Directory.Exists(outputDir))
-            {
-                Log.Info("Cleaning Output...");
-                Directory.Delete(outputDir, true);
-            }
-
-            Log.Info("Analyzing...");
-            var analyzer = new AssemblyAnalyzer(
-                target.AssemblyPath,
-                target.PdbPath,
-                enablePdbMethodRemapping);
-            var result = analyzer.Analyze();
-            var mapped = result.Mapped;
-            if (classOwnFile)
-            {
-                var ownershipResult = SourceFileOwnershipFilter.Apply(
-                    mapped,
-                    allowUnmapped,
-                    result.SkippedRelativePaths,
-                    result.TypeFullNames,
-                    externalSourcePaths,
-                    externalPriority);
-                mapped = ownershipResult.Mapped;
-                Log.Success(
-                    $"Mapped: {mapped.Count} Skipped: {result.Skipped.Count} Rejected: {ownershipResult.RejectedTypeCount} Unmapped: {ownershipResult.UnmappedTypeCount}");
-            }
-            else
-            {
-                Log.Success($"Mapped: {mapped.Count} Skipped: {result.Skipped.Count}");
-            }
-
-            Log.Info("Writing csproj...");
-            var builder = new RecoveredProjectFileBuilder(
-                target.AssemblyPath,
-                outputDir,
-                target.Name,
-                target.ProjectRefs,
-                csVersionStr,
-                dotnet,
-                dependencyDirs);
-            var projectPath = builder.Build();
-            projectPaths.Add(projectPath);
-            Log.Success($"Wrote: {projectPath}");
-
-            Log.Info("Decompiling...");
-            var phase = new DecompilerPhase(
-                target.AssemblyPath,
-                mapped,
-                outputDir,
-                csVersionStr,
-                dotnet,
-                dependencyDirs,
-                target.PdbPath,
-                enablePdbMethodRemapping);
-            phase.Run();
-
-            Log.Success($"Done: {outputDir}");
-        }
+            projectPaths.Add(RecoverTarget(options, sourceOwnership, target));
 
         Log.Info("Writing solution...");
-        var solutionPath = new RecoveredSolutionFileBuilder(output, solution, projectPaths).Build();
+        var solutionPath = new RecoveredSolutionFileBuilder(options.Output, options.SolutionName, projectPaths).Build();
         Log.Success($"Wrote: {solutionPath}");
 
         Log.Success("All Done!");
     }
 
-    private static IReadOnlyList<string> ReadExternalSourcePaths(string? sourcePaths)
+    private static string RecoverTarget(
+        RecoverOptions options,
+        SourceOwnershipService sourceOwnership,
+        TargetProject target)
     {
-        if (string.IsNullOrWhiteSpace(sourcePaths))
-            return [];
+        Log.Info($"{target.Name}");
 
-        var fullPath = Path.GetFullPath(sourcePaths);
-        if (!File.Exists(fullPath))
-        {
-            Log.Error($"Source path list not found: {fullPath}");
-            Log.Shutdown();
-            Environment.Exit(1);
-        }
+        var outputDir = target.CreateOutputDirectory(options.Output);
+        CleanOutputDirectory(outputDir);
 
-        return File.ReadLines(fullPath)
-            .Select(line => line.Trim())
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .Where(line => !line.StartsWith("#", StringComparison.Ordinal))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var mapped = AnalyzeTarget(options, sourceOwnership, target);
+
+        Log.Info("Writing csproj...");
+        var projectPath = new RecoveredProjectFileBuilder(
+            target.AssemblyPath,
+            outputDir,
+            target.Name,
+            target.ProjectRefs,
+            options.CSharpVersion,
+            options.DotNetVersion,
+            options.DependencySearchDirs).Build();
+        Log.Success($"Wrote: {projectPath}");
+
+        Log.Info("Decompiling...");
+        new DecompilerPhase(target, mapped, outputDir, options).Run();
+
+        Log.Success($"Done: {outputDir}");
+        return projectPath;
     }
 
-    private static List<TargetProject> ValidateAndResolveTargets(string inputFolder)
+    private static IReadOnlyList<SourceFileMap> AnalyzeTarget(
+        RecoverOptions options,
+        SourceOwnershipService sourceOwnership,
+        TargetProject target)
     {
-        if (!Directory.Exists(inputFolder))
+        Log.Info("Analyzing...");
+        var result = new AssemblyAnalyzer(target).Analyze();
+        var ownershipResult = sourceOwnership.Apply(result);
+        if (options.SourceOwnership.Enabled)
         {
-            Log.Error($"Input folder not found: {inputFolder}");
-            Log.Shutdown();
-            Environment.Exit(1);
+            Log.Success(
+                $"Mapped: {ownershipResult.Mapped.Count} Skipped: {result.Skipped.Count} Rejected: {ownershipResult.RejectedTypeCount} Unmapped: {ownershipResult.UnmappedTypeCount}");
+        }
+        else
+        {
+            Log.Success($"Mapped: {ownershipResult.Mapped.Count} Skipped: {result.Skipped.Count}");
         }
 
-        var targets = Directory.GetFiles(inputFolder)
-            .AsValueEnumerable()
-            .Where(IsTargetAssemblyPath)
-            .Where(HasManagedMetadata)
-            .Select(p => (
-                AssemblyPath: p,
-                PdbPath: Path.ChangeExtension(p, ".pdb"),
-                Name: Path.GetFileNameWithoutExtension(p)
-            ))
-            .Where(t => File.Exists(t.PdbPath))
-            .ToList();
-
-        if (targets.Count == 0)
-        {
-            Log.Error($"No target managed assemblies with matching pdbs found in {inputFolder}");
-            Log.Shutdown();
-            Environment.Exit(1);
-        }
-
-        var projectNames = targets
-            .AsValueEnumerable()
-            .Select(t => t.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var targetReferences = targets
-            .AsValueEnumerable()
-            .Select(t => (
-                t.Name,
-                References: ReadAssemblyReferenceNames(t.AssemblyPath)
-                    .Where(name => !projectNames.Contains(name))
-                    .ToList()))
-            .ToDictionary(t => t.Name, t => t.References, StringComparer.OrdinalIgnoreCase);
-
-        return targets
-            .AsValueEnumerable()
-            .Select(t => new TargetProject(
-                t.AssemblyPath,
-                t.PdbPath,
-                t.Name,
-                BuildProjectRefs(t.AssemblyPath, t.Name, projectNames, targetReferences)))
-            .ToList();
+        return ownershipResult.Mapped;
     }
 
-    private static bool IsTargetAssemblyPath(string path)
+    private static void CleanOutputDirectory(string outputDir)
     {
-        var extension = Path.GetExtension(path);
-        return string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase);
+        if (!Directory.Exists(outputDir))
+            return;
+
+        Log.Info("Cleaning Output...");
+        Directory.Delete(outputDir, true);
     }
 
-    private static bool HasManagedMetadata(string path)
+    private static void Fail(string message)
     {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            using var reader = new PEReader(stream);
-            return reader.HasMetadata;
-        }
-        catch
-        {
-            return false;
-        }
+        Log.Error(message);
+        Log.Shutdown();
+        Environment.Exit(1);
     }
-
-    private static List<ProjectReferenceInfo> BuildProjectRefs(
-        string dllPath,
-        string projectName,
-        IReadOnlySet<string> projectNames,
-        IReadOnlyDictionary<string, List<string>> targetReferences) =>
-        ReadAssemblyReferenceNames(dllPath)
-            .Where(projectNames.Contains)
-            .Where(name => !string.Equals(name, projectName, StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Select(name => new ProjectReferenceInfo(
-                name,
-                Path.Combine("..", name, $"{name}.csproj"),
-                targetReferences.TryGetValue(name, out var dependencies) ? dependencies : []))
-            .ToList();
-
-    private static List<string> ReadAssemblyReferenceNames(string dllPath)
-    {
-        var file = new PEFile(dllPath);
-
-        return file.Metadata.AssemblyReferences
-            .AsValueEnumerable()
-            .Select(handle => file.Metadata.GetString(file.Metadata.GetAssemblyReference(handle).Name))
-            .ToList();
-    }
-
-    private sealed record TargetProject(
-        string AssemblyPath,
-        string PdbPath,
-        string Name,
-        List<ProjectReferenceInfo> ProjectRefs);
 }

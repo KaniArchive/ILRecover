@@ -16,16 +16,12 @@ using SyntaxTree = ICSharpCode.Decompiler.CSharp.Syntax.SyntaxTree;
 namespace ILRecover.Analysis.Decompiler;
 
 public partial class DecompilerPhase(
-    string dllPath,
+    TargetProject target,
     IReadOnlyList<SourceFileMap> mapped,
     string outputDir,
-    string? csVersion = null,
-    string? dotnetVersion = null,
-    IReadOnlyList<string>? dependencySearchDirs = null,
-    string? pdbPath = null,
-    bool enablePdbMethodRemapping = false)
+    RecoverOptions options)
 {
-    private readonly string _assemblyName = Path.GetFileNameWithoutExtension(dllPath);
+    private readonly string _assemblyName = target.Name;
 
     private readonly Dictionary<string, IReadOnlyDictionary<string, SyntaxTree>> _documentSliceCache =
         new(StringComparer.Ordinal);
@@ -286,7 +282,7 @@ public partial class DecompilerPhase(
 
     private CSharpDecompiler BuildDecompiler(IDebugInfoProvider? debugInfoProvider)
     {
-        var langVersion = csVersion switch
+        var langVersion = options.CSharpVersion switch
         {
             "14" or "latest" => LanguageVersion.Latest,
             "13" => LanguageVersion.CSharp13_0,
@@ -306,12 +302,12 @@ public partial class DecompilerPhase(
             UseDebugSymbols = debugInfoProvider is not null
         };
 
-        var file = new PEFile(dllPath);
+        var file = new PEFile(target.AssemblyPath);
         var targetFrameworkId = GetTargetFrameworkId(file);
-        var resolver = new UniversalAssemblyResolver(dllPath, false, targetFrameworkId);
+        var resolver = new UniversalAssemblyResolver(target.AssemblyPath, false, targetFrameworkId);
         AddResolverSearchDirectories(resolver);
 
-        return new CSharpDecompiler(dllPath, resolver, settings)
+        return new CSharpDecompiler(target.AssemblyPath, resolver, settings)
         {
             DebugInfoProvider = debugInfoProvider
         };
@@ -319,10 +315,10 @@ public partial class DecompilerPhase(
 
     private string GetTargetFrameworkId(PEFile file)
     {
-        if (string.IsNullOrWhiteSpace(dotnetVersion))
+        if (string.IsNullOrWhiteSpace(options.DotNetVersion))
             return file.DetectTargetFrameworkId();
 
-        var normalized = dotnetVersion.Trim();
+        var normalized = options.DotNetVersion.Trim();
         if (normalized.StartsWith("net", StringComparison.OrdinalIgnoreCase))
             normalized = normalized[3..];
 
@@ -333,16 +329,16 @@ public partial class DecompilerPhase(
 
     private IDebugInfoProvider? BuildDebugInfoProvider()
     {
-        if (string.IsNullOrWhiteSpace(pdbPath) || !File.Exists(pdbPath))
+        if (string.IsNullOrWhiteSpace(target.PdbPath) || !File.Exists(target.PdbPath))
             return null;
 
         try
         {
-            var debugInfoProvider = DebugInfoUtils.FromFile(new PEFile(dllPath), pdbPath);
-            if (debugInfoProvider is null || !enablePdbMethodRemapping)
+            var debugInfoProvider = DebugInfoUtils.FromFile(new PEFile(target.AssemblyPath), target.PdbPath);
+            if (debugInfoProvider is null || !target.PdbMethodRemapOptions.Enabled)
                 return debugInfoProvider;
 
-            var methodDebugMap = PdbMethodMapper.Build(dllPath, pdbPath);
+            var methodDebugMap = PdbMethodMapper.Build(target.AssemblyPath, target.PdbPath, target.PdbMethodRemapOptions);
             return new RemappedDebugInfoProvider(debugInfoProvider, methodDebugMap);
         }
         catch
@@ -353,17 +349,17 @@ public partial class DecompilerPhase(
 
     private void AddResolverSearchDirectories(UniversalAssemblyResolver resolver)
     {
-        var dllDirectory = Path.GetDirectoryName(dllPath);
+        var dllDirectory = Path.GetDirectoryName(target.AssemblyPath);
         if (!string.IsNullOrWhiteSpace(dllDirectory) && Directory.Exists(dllDirectory))
             resolver.AddSearchDirectory(dllDirectory);
 
-        if (dependencySearchDirs is null || dependencySearchDirs.Count == 0)
+        if (options.DependencySearchDirs.Count == 0)
         {
             Log.Warning("No dependency search directories were provided. Use -dp to resolve referenced assemblies");
             return;
         }
 
-        foreach (var dependencyDir in dependencySearchDirs)
+        foreach (var dependencyDir in options.DependencySearchDirs)
         {
             if (string.IsNullOrWhiteSpace(dependencyDir))
                 continue;

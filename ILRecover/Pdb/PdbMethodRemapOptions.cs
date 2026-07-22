@@ -2,9 +2,15 @@ using ZLinq;
 
 namespace ILRecover.Pdb;
 
-public sealed class PdbMethodRemapOptions(IReadOnlyList<string> patterns)
+public sealed class PdbMethodRemapOptions(IReadOnlyList<string> patterns, int maxShift)
 {
-    public static PdbMethodRemapOptions Disabled { get; } = new([]);
+    public const int DefaultMaxShift = 40000;
+
+    public static PdbMethodRemapOptions Disabled { get; } = new([], DefaultMaxShift);
+
+    public int MaxShift { get; } = maxShift;
+
+    public bool Enabled => patterns.Count > 0;
 
     public bool IsEnabledFor(string assemblyName) =>
         patterns

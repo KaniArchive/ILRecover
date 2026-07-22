@@ -75,7 +75,7 @@ public partial class DecompilerPhase
                 referencePaths.Add(Path.GetFullPath(path));
         }
 
-        referencePaths.Add(Path.GetFullPath(dllPath));
+        referencePaths.Add(Path.GetFullPath(target.AssemblyPath));
 
         _formattingReferences = referencePaths
             .Where(File.Exists)
@@ -87,17 +87,14 @@ public partial class DecompilerPhase
 
     private IEnumerable<string> GetFormattingReferenceDirectories()
     {
-        var dllDirectory = Path.GetDirectoryName(dllPath);
+        var dllDirectory = Path.GetDirectoryName(target.AssemblyPath);
         if (!string.IsNullOrWhiteSpace(dllDirectory))
             yield return dllDirectory;
 
         foreach (var sharedFrameworkDirectory in GetSharedFrameworkDirectories())
             yield return sharedFrameworkDirectory;
 
-        if (dependencySearchDirs is null)
-            yield break;
-
-        foreach (var dependencyDir in dependencySearchDirs)
+        foreach (var dependencyDir in options.DependencySearchDirs)
         {
             if (string.IsNullOrWhiteSpace(dependencyDir))
                 continue;

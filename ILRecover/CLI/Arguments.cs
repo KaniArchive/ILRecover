@@ -1,3 +1,5 @@
+using ILRecover.Pdb;
+
 namespace ILRecover.CLI;
 
 public static class Args
@@ -12,6 +14,7 @@ public static class Args
     /// <param name="solution">-sl, Name of the solution.</param>
     /// <param name="dotnet">-dn, Target .NET framework (e.g. net9.0).</param>
     /// <param name="shift">-sh, Assembly name patterns that enable shifted PDB method-row recovery.</param>
+    /// <param name="shiftMax">-sm, Maximum absolute shifted PDB method-row recovery offset.</param>
     /// <param name="classOwnFile">-cf, Keep only classes that are owned by the mapped source file name.</param>
     /// <param name="allowUnmapped">-au, Emit rejected class ownership matches under Unmapped for manual recovery.</param>
     /// <param name="sourcePaths">-sp, Additional source path list used to map rejected/unmapped class-owned files.</param>
@@ -23,11 +26,12 @@ public static class Args
         string? solution = null,
         string? dotnet = null,
         string[]? shift = null,
+        int shiftMax = PdbMethodRemapOptions.DefaultMaxShift,
         bool classOwnFile = false,
         bool allowUnmapped = false,
         string? sourcePaths = null,
         bool externalPriority = false,
         params string[]? dependencies) =>
-        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift, classOwnFile, allowUnmapped,
+        Parser.Execute(input, output, csVersion, dependencies, solution, dotnet, shift, shiftMax, classOwnFile, allowUnmapped,
             sourcePaths, externalPriority);
 }
