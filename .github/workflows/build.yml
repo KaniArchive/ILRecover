@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build in Release'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build for ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+
+    strategy:
+      matrix:
+        config:
+          - { name: linux-x86_64, os: ubuntu-latest, rid: linux-x64 }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { name: windows-x86_64, os: windows-latest, rid: win-x64 }
+          - { name: windows-aarch64, os: windows-latest, rid: win-arm64 }
+          - { name: macos-x86_64, os: macos-15, rid: osx-x64 }
+          - { name: macos-aarch64, os: macos-15, rid: osx-arm64 }
+
+    env:
+      BUILD_CONFIG: ${{ (github.event_name == 'workflow_dispatch' && inputs.release) && 'Release' || 'Debug' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: dotnet publish ILRecover/ILRecover.csproj -c ${{ env.BUILD_CONFIG }} -r ${{ matrix.config.rid }} -o ./publish/${{ matrix.config.rid }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ matrix.config.rid }}
+          path: publish/${{ matrix.config.rid }}
