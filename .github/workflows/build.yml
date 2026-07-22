@@ -38,7 +38,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Publish
-        run: dotnet publish ILRecover/ILRecover.csproj -c ${{ env.BUILD_CONFIG }} -r ${{ matrix.config.rid }} -o ./publish/${{ matrix.config.rid }}
+        run: dotnet publish ILRecover/ILRecover.csproj -c ${{ env.BUILD_CONFIG }} -r ${{ matrix.config.rid }} -o ./publish/${{ matrix.config.rid }} -p:RestoreLockedMode=false
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
